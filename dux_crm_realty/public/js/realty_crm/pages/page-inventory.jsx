@@ -69,6 +69,16 @@ window.PageInventory = function PageInventory({ search = "" }) {
   };
   const matchCount = unitQuery ? allUnits.filter(matchUnit).length : null;
 
+  // Cross-project search: which OTHER projects also contain matching units, so the
+  // user can jump straight there instead of switching + searching each one.
+  const crossMatches = !unitQuery ? [] : (data.projects || []).map(p => {
+    const g = grids[p.id];
+    if (!g) return null;
+    const n = Object.values(g).flatMap(fl => Object.values(fl).flat()).filter(matchUnit).length;
+    return n ? { id: p.id, code: p.code, name: p.name, n } : null;
+  }).filter(Boolean);
+  const totalCrossMatches = crossMatches.reduce((a, m) => a + m.n, 0);
+
   // Re-resolve the selected unit from the live grid each render so the panel never
   // shows a stale object after a refresh, and auto-closes if a filter hides it.
   const liveSelected = selectedUnit ? allUnits.find(u => u.id === selectedUnit.id) : null;
@@ -150,6 +160,32 @@ window.PageInventory = function PageInventory({ search = "" }) {
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
+        {/* Cross-project search results — jump to any project that has matches */}
+        {unitQuery && (
+          <div style={{ background: "var(--dux-navy)", color: "#fff", borderRadius: 12, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: "var(--font-display)", fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "rgba(255,255,255,0.7)" }}>
+              “{search.trim()}” · {totalCrossMatches} unit{totalCrossMatches === 1 ? "" : "s"} in {crossMatches.length} project{crossMatches.length === 1 ? "" : "s"}
+            </span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", flex: 1 }}>
+              {crossMatches.map(m => {
+                const active = m.id === activeProject;
+                return (
+                  <button key={m.id} onClick={() => { setActiveProject(m.id); setSelectedUnit(null); }} style={{
+                    display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                    border: "1px solid " + (active ? "var(--dux-amber)" : "rgba(255,255,255,0.25)"),
+                    background: active ? "var(--dux-amber)" : "rgba(255,255,255,0.08)",
+                    color: active ? "var(--dux-black)" : "#fff", fontSize: 12, fontWeight: 600, fontFamily: "var(--font-display)",
+                  }}>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, opacity: 0.8 }}>{m.code}</span>
+                    {m.name}
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: "0 6px", borderRadius: 999, background: active ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.18)" }}>{m.n}</span>
+                  </button>
+                );
+              })}
+              {crossMatches.length === 0 && <span style={{ fontSize: 13, color: "rgba(255,255,255,0.8)" }}>No units match across any project.</span>}
+            </div>
+          </div>
+        )}
         <div style={{
           background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 14, padding: 24, marginBottom: 20,
           display: "grid", gridTemplateColumns: "1.6fr repeat(6, 1fr)", gap: 18, alignItems: "center",
