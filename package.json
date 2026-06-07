@@ -1,0 +1,10 @@
+{
+  "name": "dux_crm_realty",
+  "version": "0.0.1",
+  "description": "Shradha Real Estate CRM — React desk app",
+  "private": true,
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

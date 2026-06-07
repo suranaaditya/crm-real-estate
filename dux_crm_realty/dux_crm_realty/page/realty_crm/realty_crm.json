@@ -1,0 +1,36 @@
+{
+ "content": null,
+ "creation": "2026-06-06 00:00:00",
+ "docstatus": 0,
+ "doctype": "Page",
+ "icon": "fa fa-building",
+ "idx": 0,
+ "modified": "2026-06-06 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Dux CRM Realty",
+ "name": "realty-crm",
+ "owner": "Administrator",
+ "page_name": "realty-crm",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Realty Admin"
+  },
+  {
+   "role": "Realty Sales Manager"
+  },
+  {
+   "role": "Realty Sales Executive"
+  },
+  {
+   "role": "Realty Finance"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Shradha CRM"
+}

@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Shradha CRM — Handoff Brief</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --black: #0A0A0A;
+    --navy: #0F1A2E;
+    --amber: #F2A93B;
+    --amber-600: #D88E1F;
+    --amber-100: #FCEFD3;
+    --coral: #E26A4A;
+    --coral-100: #FAE3D9;
+    --neutral-50: #F7F6F2;
+    --neutral-100: #EFEEEA;
+    --neutral-200: #E8E8E8;
+    --neutral-400: #9A9A9A;
+    --neutral-600: #5C5C5C;
+    --neutral-800: #2A2A2A;
+    --hairline: #E8E8E8;
+    --success: #3A8F5A;
+
+    --display: 'Montserrat', system-ui, sans-serif;
+    --body: 'Poppins', system-ui, sans-serif;
+    --mono: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--body);
+    color: var(--neutral-800);
+    background: var(--neutral-100);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+
+  /* A4 page surface */
+  .page {
+    width: 794px;        /* A4 @ 96dpi */
+    min-height: 1123px;
+    background: #fff;
+    margin: 32px auto;
+    box-shadow: 0 8px 32px rgba(15,26,46,0.10);
+    padding: 56px 56px 48px;
+    page-break-after: always;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* ---------- Cover header ---------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 18px;
+    border-bottom: 2px solid var(--black);
+  }
+  .brand-block {
+    display: flex; align-items: center; gap: 16px;
+  }
+  .brand-mono {
+    width: 44px; height: 44px;
+    background: var(--black);
+    color: var(--amber);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--display);
+    font-weight: 800;
+    font-size: 18px;
+    letter-spacing: 0.02em;
+  }
+  .brand-text { line-height: 1.1; }
+  .brand-text .b1 {
+    font-family: var(--display);
+    font-weight: 800; font-size: 14px;
+    letter-spacing: 0.04em;
+  }
+  .brand-text .b2 {
+    font-size: 10px;
+    color: var(--neutral-600);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-top: 3px;
+  }
+  .meta {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--neutral-600);
+    line-height: 1.6;
+    letter-spacing: 0.04em;
+  }
+  .meta strong { color: var(--neutral-800); font-weight: 700; }
+
+  .eyebrow {
+    font-family: var(--display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--amber-600);
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 800;
+    font-size: 42px;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    margin: 24px 0 12px;
+    color: var(--black);
+  }
+  h1 em {
+    font-style: normal;
+    color: var(--amber-600);
+  }
+  h2 {
+    font-family: var(--display);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+    color: var(--black);
+  }
+  h3 {
+    font-family: var(--display);
+    font-size: 13px;
+    font-weight: 700;
+    margin: 0 0 6px;
+    color: var(--black);
+  }
+  .lede {
+    font-size: 15px;
+    color: var(--neutral-600);
+    max-width: 640px;
+    line-height: 1.55;
+    margin: 0 0 32px;
+  }
+
+  /* ---------- Stat strip ---------- */
+  .stat-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--hairline);
+    margin: 28px 0 32px;
+  }
+  .stat {
+    padding: 14px 16px 14px 0;
+    border-right: 1px solid var(--hairline);
+  }
+  .stat:last-child { border-right: none; padding-right: 0; }
+  .stat .lbl {
+    font-family: var(--display);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--neutral-600);
+  }
+  .stat .val {
+    font-family: var(--display);
+    font-size: 22px;
+    font-weight: 800;
+    margin-top: 4px;
+    letter-spacing: -0.01em;
+  }
+  .stat .sub {
+    font-size: 11px;
+    color: var(--neutral-400);
+    margin-top: 2px;
+  }
+
+  /* ---------- Section grid ---------- */
+  .section {
+    margin-top: 28px;
+  }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 8px;
+    margin-bottom: 14px;
+  }
+  .section-head .num {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--amber-600);
+    letter-spacing: 0.1em;
+  }
+
+  /* Module cards */
+  .modules {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+  .mod {
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: var(--neutral-50);
+    position: relative;
+  }
+  .mod .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .mod .name {
+    font-family: var(--display);
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .mod .pill {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    text-transform: uppercase;
+  }
+  .pill-ready { background: rgba(58,143,90,0.12); color: var(--success); }
+  .pill-stub  { background: var(--neutral-100); color: var(--neutral-600); }
+  .mod p {
+    font-size: 12px;
+    color: var(--neutral-600);
+    margin: 0;
+    line-height: 1.45;
+  }
+
+  /* Flow steps */
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+  }
+  .step {
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 12px 12px;
+    background: #fff;
+    position: relative;
+  }
+  .step .n {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--amber-600);
+  }
+  .step .t {
+    font-family: var(--display);
+    font-size: 12px;
+    font-weight: 700;
+    margin-top: 4px;
+  }
+  .step .d {
+    font-size: 11px;
+    color: var(--neutral-600);
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+
+  /* Two-column: scope vs not-yet */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  ul.bullets {
+    margin: 0; padding: 0;
+    list-style: none;
+  }
+  ul.bullets li {
+    position: relative;
+    padding-left: 18px;
+    font-size: 12px;
+    color: var(--neutral-800);
+    line-height: 1.55;
+    margin-bottom: 6px;
+  }
+  ul.bullets li::before {
+    content: "";
+    position: absolute;
+    left: 4px; top: 8px;
+    width: 5px; height: 5px;
+    background: var(--amber);
+    border-radius: 1px;
+  }
+  ul.bullets.muted li {
+    color: var(--neutral-600);
+  }
+  ul.bullets.muted li::before {
+    background: var(--neutral-400);
+  }
+  ul.bullets.warn li::before {
+    background: var(--coral);
+  }
+
+  /* Callout box */
+  .callout {
+    border: 1px solid var(--amber);
+    border-left: 4px solid var(--amber);
+    background: var(--amber-100);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin-top: 22px;
+  }
+  .callout h3 { color: var(--amber-600); margin-bottom: 4px; }
+  .callout p { font-size: 12px; color: var(--neutral-800); margin: 0; line-height: 1.5; }
+
+  /* Footer */
+  .footer {
+    margin-top: 36px;
+    padding-top: 16px;
+    border-top: 1px solid var(--hairline);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    color: var(--neutral-400);
+    font-family: var(--mono);
+    letter-spacing: 0.06em;
+  }
+  .footer .right { display: flex; gap: 18px; }
+
+  /* Print */
+  @media print {
+    body { background: #fff; }
+    .page {
+      margin: 0; box-shadow: none;
+      padding: 36px 36px 24px;
+      width: 100%; min-height: auto;
+    }
+    @page { size: A4; margin: 12mm; }
+  }
+
+  /* Screen padding for narrow viewports */
+  @media (max-width: 880px) {
+    .page { width: 100%; padding: 32px 24px; box-shadow: none; margin: 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <!-- Header -->
+  <div class="topbar">
+    <div class="brand-block">
+      <div class="brand-mono">DK</div>
+      <div class="brand-text">
+        <div class="b1">SHRADHA CRM</div>
+        <div class="b2">Built by Dux Digitech</div>
+      </div>
+    </div>
+    <div class="meta">
+      <strong>HANDOFF BRIEF · v1.0</strong><br />
+      Prepared for Shradha Realty<br />
+      29 April 2026
+    </div>
+  </div>
+
+  <!-- Title block -->
+  <div style="margin-top: 32px;">
+    <div class="eyebrow">Internal Sales &amp; Operations Platform</div>
+    <h1>A single CRM for <em>leads, visits, inventory<br />&amp; bookings</em> — purpose-built for Shradha.</h1>
+    <p class="lede">
+      This document accompanies the interactive HTML prototype. It explains what the prototype demonstrates,
+      which modules are designed end-to-end, what's currently a placeholder, and what we recommend for the
+      production build that follows.
+    </p>
+  </div>
+
+  <!-- Stat strip -->
+  <div class="stat-strip">
+    <div class="stat">
+      <div class="lbl">Modules designed</div>
+      <div class="val">7</div>
+      <div class="sub">+ 2 stub pages</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Key user flows</div>
+      <div class="val">5</div>
+      <div class="sub">walk-in to registration</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Sample units modelled</div>
+      <div class="val">120+</div>
+      <div class="sub">Abhiman Niwas grid</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Roles supported</div>
+      <div class="val">4</div>
+      <div class="sub">Sales, Mgr, Finance, Admin</div>
+    </div>
+  </div>
+
+  <!-- What's in the prototype -->
+  <div class="section">
+    <div class="section-head">
+      <span class="num">01</span>
+      <h2>What's in the prototype</h2>
+    </div>
+    <div class="modules">
+      <div class="mod">
+        <div class="head"><div class="name">Workspace (Leads)</div><div class="pill pill-ready">Designed</div></div>
+        <p>Unified Table + Kanban view of all leads with filters, hot-lead toggles, and a slide-in detail drawer that covers activity, tasks, inventory match, and cost sheet.</p>
+      </div>
+      <div class="mod">
+        <div class="head"><div class="name">Site Visits</div><div class="pill pill-ready">Designed</div></div>
+        <p>Week calendar + day timeline. Confirmed / in-progress / completed / no-show states. Click any visit to jump to that lead.</p>
+      </div>
+      <div class="mod">
+        <div class="head"><div class="name">Inventory</div><div class="pill pill-ready">Designed</div></div>
+        <p>Tower / floor / unit grid for Abhiman Niwas. Sold &middot; available &middot; blocked status. Hover a unit for carpet, price, rate/sqft, all-in.</p>
+      </div>
+      <div class="mod">
+        <div class="head"><div class="name">Bookings</div><div class="pill pill-ready">Designed</div></div>
+        <p>Booking list + cost sheet detail. 4-stage progress: token → agreement → registration → registered. Document checklist per booking.</p>
+      </div>
+      <div class="mod">
+        <div class="head"><div class="name">Payments &amp; Schedule</div><div class="pill pill-ready">Designed</div></div>
+        <p>Outstanding, due, scheduled, paid milestones. DPD calculation, reminder action, receipt look-up. Quarter collections summary.</p>
+      </div>
+      <div class="mod">
+        <div class="head"><div class="name">Channel Partners</div><div class="pill pill-ready">Designed</div></div>
+        <p>Broker directory with tier (Platinum / Gold / Silver), lead &amp; booking counts, commission earned, outstanding payout.</p>
+      </div>
+      <div class="mod">
+        <div class="head"><div class="name">Dashboard</div><div class="pill pill-ready">Designed</div></div>
+        <p>Sales funnel, today's tasks &amp; visits, KPI tiles. Personalised greeting + day's priorities for the logged-in user.</p>
+      </div>
+      <div class="mod">
+        <div class="head"><div class="name">Reports &amp; Settings</div><div class="pill pill-stub">Stub</div></div>
+        <p>Navigation in place; full reports library &amp; admin/settings screens to be specified in the next pass.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span>SHRADHA REALTY × DUX DIGITECH</span>
+    <div class="right">
+      <span>Page 1 / 2</span>
+      <span>shradhainfra.in</span>
+    </div>
+  </div>
+</div>
+
+<!-- ====================== PAGE 2 ====================== -->
+<div class="page">
+  <!-- Header (compact) -->
+  <div class="topbar">
+    <div class="brand-block">
+      <div class="brand-mono">DK</div>
+      <div class="brand-text">
+        <div class="b1">SHRADHA CRM</div>
+        <div class="b2">Handoff Brief</div>
+      </div>
+    </div>
+    <div class="meta">
+      <strong>v1.0 · 29 Apr 2026</strong><br />
+      Prepared by Dux Digitech
+    </div>
+  </div>
+
+  <!-- Key flows -->
+  <div class="section" style="margin-top: 36px;">
+    <div class="section-head">
+      <span class="num">02</span>
+      <h2>Key flow modelled — walk-in to registration</h2>
+    </div>
+    <div class="flow">
+      <div class="step">
+        <div class="n">01</div>
+        <div class="t">Lead capture</div>
+        <div class="d">Walk-in, web form, broker, IVR — all routed to Workspace.</div>
+      </div>
+      <div class="step">
+        <div class="n">02</div>
+        <div class="t">Qualify &amp; assign</div>
+        <div class="d">Owner picks up, logs call/visit. Hot toggle &amp; budget captured.</div>
+      </div>
+      <div class="step">
+        <div class="n">03</div>
+        <div class="t">Site visit</div>
+        <div class="d">Scheduled in calendar; outcome recorded against the lead.</div>
+      </div>
+      <div class="step">
+        <div class="n">04</div>
+        <div class="t">Block + book</div>
+        <div class="d">Unit blocked from inventory; cost sheet emailed; token logged.</div>
+      </div>
+      <div class="step">
+        <div class="n">05</div>
+        <div class="t">Register &amp; collect</div>
+        <div class="d">Agreement, registration, milestone schedule auto-tracked.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Two-column: in scope / not yet -->
+  <div class="section">
+    <div class="section-head">
+      <span class="num">03</span>
+      <h2>What's real vs what's a placeholder</h2>
+    </div>
+    <div class="two-col">
+      <div>
+        <h3 style="color: var(--success);">Designed &amp; clickable</h3>
+        <ul class="bullets">
+          <li>Visual layout, typography, colour system, iconography</li>
+          <li>All 7 module screens with realistic sample data</li>
+          <li>Lead detail drawer with 5 tabs (activity, tasks, inventory, cost sheet, files)</li>
+          <li>Workspace view toggle (Table ↔ Kanban) with shared filters</li>
+          <li>Inventory hover-tooltip for unit details</li>
+          <li>Booking stage progress + document checklist</li>
+          <li>Payment status pills + DPD calculation</li>
+          <li>Tweaks panel (live colour / density / view toggles)</li>
+        </ul>
+      </div>
+      <div>
+        <h3 style="color: var(--coral);">Not yet — needs the production build</h3>
+        <ul class="bullets warn">
+          <li>Login, user roles, permissions</li>
+          <li>Real database, save/sync, audit log</li>
+          <li>SMS / WhatsApp / Email gateway integration</li>
+          <li>Cost sheet / agreement PDF generation</li>
+          <li>Payment gateway + receipt issuing</li>
+          <li>RERA &amp; bank-loan API hooks</li>
+          <li>"+ New Lead" form, sidebar router (clicks switch state but no URL)</li>
+          <li>Reports library &amp; full Settings (admin, masters, tariffs)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recommended next steps -->
+  <div class="section">
+    <div class="section-head">
+      <span class="num">04</span>
+      <h2>Recommended next steps</h2>
+    </div>
+    <div class="two-col">
+      <div>
+        <h3>Round 2 — design polish (1 week)</h3>
+        <ul class="bullets muted">
+          <li>Client review of the prototype, collect feedback</li>
+          <li>Lock copy, micro-flows, and edge cases (cancellation, refund, re-allocation)</li>
+          <li>Specify Reports library &amp; Settings screens</li>
+          <li>Mobile site-visit flow (sales rep on phone, offline-tolerant)</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Build phase — production app (3-5 months)</h3>
+        <ul class="bullets muted">
+          <li>Backend: PostgreSQL, role-based auth, audit log</li>
+          <li>Frontend: React + this design system as the foundation</li>
+          <li>Integrations: Twilio/Gupshup, payment gateway, RERA</li>
+          <li>iOS/Android shell for site-visit + lead capture</li>
+          <li>Staged rollout: Sales team first, then Finance, then Admin</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Callout -->
+  <div class="callout">
+    <h3>How to use the prototype</h3>
+    <p>
+      Open <strong>Real Estate CRM (standalone).html</strong> in any modern browser (double-click the file).
+      No internet connection needed; all assets are inlined. Toggle the <strong>Tweaks</strong> control in the
+      header to switch table/kanban density, colour temperature, and view-defaults. The data shown is illustrative —
+      real numbers will be wired in during the production build.
+    </p>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span>SHRADHA REALTY × DUX DIGITECH</span>
+    <div class="right">
+      <span>Page 2 / 2</span>
+      <span>End of brief</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

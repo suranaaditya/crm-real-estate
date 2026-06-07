@@ -1,0 +1,192 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:campaign_id",
+ "creation": "2026-06-06 23:40:08.728971",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "campaign_id",
+  "campaign_name",
+  "channel",
+  "status",
+  "col_break_camp",
+  "start_date",
+  "end_date",
+  "budget",
+  "spent",
+  "sec_break_camp",
+  "leads",
+  "qualified",
+  "visits",
+  "col_break_camp2",
+  "bookings",
+  "cpl"
+ ],
+ "fields": [
+  {
+   "fieldname": "campaign_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Campaign ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "campaign_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Campaign Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "channel",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Channel"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "active\nended\nscheduled"
+  },
+  {
+   "fieldname": "col_break_camp",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "start_date",
+   "fieldtype": "Date",
+   "label": "Start Date"
+  },
+  {
+   "fieldname": "end_date",
+   "fieldtype": "Date",
+   "label": "End Date"
+  },
+  {
+   "fieldname": "budget",
+   "fieldtype": "Currency",
+   "label": "Budget"
+  },
+  {
+   "fieldname": "spent",
+   "fieldtype": "Currency",
+   "label": "Spent"
+  },
+  {
+   "fieldname": "sec_break_camp",
+   "fieldtype": "Section Break",
+   "label": "Performance"
+  },
+  {
+   "fieldname": "leads",
+   "fieldtype": "Int",
+   "label": "Leads"
+  },
+  {
+   "fieldname": "qualified",
+   "fieldtype": "Int",
+   "label": "Qualified"
+  },
+  {
+   "fieldname": "visits",
+   "fieldtype": "Int",
+   "label": "Visits"
+  },
+  {
+   "fieldname": "col_break_camp2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "bookings",
+   "fieldtype": "Int",
+   "label": "Bookings"
+  },
+  {
+   "fieldname": "cpl",
+   "fieldtype": "Currency",
+   "label": "Cost Per Lead"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-06 23:40:08.728971",
+ "modified_by": "Administrator",
+ "module": "Dux CRM Realty",
+ "name": "Realty Campaign",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Admin",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Sales Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Sales Executive",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Finance",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "campaign_name",
+ "track_changes": 1
+}
