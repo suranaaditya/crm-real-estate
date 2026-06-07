@@ -303,3 +303,8 @@ body.realty-crm-active .body-sidebar { display: none !important; }
 /* Removing the flex sibling lets the main content reflow full-width; this is
    belt-and-suspenders in case a theme sets an explicit width. */
 body.realty-crm-active .layout-main { width: 100%; }
+
+/* Horizontally-scrollable project tabs (Inventory) — hide the scrollbar; the
+   ‹ › arrows + drag/trackpad do the scrolling. */
+.realty-crm-root .dux-tabscroll { scrollbar-width: none; -ms-overflow-style: none; }
+.realty-crm-root .dux-tabscroll::-webkit-scrollbar { height: 0; width: 0; display: none; }

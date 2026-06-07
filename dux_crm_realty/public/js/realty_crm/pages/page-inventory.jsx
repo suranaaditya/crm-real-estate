@@ -9,6 +9,7 @@ window.PageInventory = function PageInventory() {
   const [holdModal, setHoldModal] = React.useState(null);          // {unit, kind} | null — request form
   const [showProjectModal, setShowProjectModal] = React.useState(false);
   const [showUnitsModal, setShowUnitsModal] = React.useState(false);
+  const [projQuery, setProjQuery] = React.useState("");   // filter the project tabs
 
   // Esc closes the persistent detail panel
   React.useEffect(() => {
@@ -17,6 +18,26 @@ window.PageInventory = function PageInventory() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedUnit]);
+
+  // Horizontally-scrollable project tabs: show ‹ › arrows only when overflowing.
+  const tabScrollRef = React.useRef(null);
+  const [tabOverflow, setTabOverflow] = React.useState(false);
+  const allProjects = data.projects || [];
+  const showProjSearch = allProjects.length > 6;
+  const visibleProjects = React.useMemo(() => {
+    const q = projQuery.trim().toLowerCase();
+    if (!q) return allProjects;
+    return allProjects.filter(p => `${p.name} ${p.code} ${p.locality || ""} ${p.city || ""}`.toLowerCase().includes(q));
+  }, [allProjects, projQuery]);
+  React.useEffect(() => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    const measure = () => setTabOverflow(el.scrollWidth > el.clientWidth + 4);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [visibleProjects.length]);
+  const scrollTabs = (dir) => { const el = tabScrollRef.current; if (el) el.scrollBy({ left: dir * 280, behavior: "smooth" }); };
 
   const proj = data.projects.find(p => p.id === activeProject);
 
@@ -70,32 +91,51 @@ window.PageInventory = function PageInventory() {
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{
-        padding: "0 24px", display: "flex", gap: 0,
+        padding: "0 12px 0 24px", display: "flex", alignItems: "center", gap: 6,
         borderBottom: "1px solid var(--hairline)", background: "var(--bg)",
       }}>
-        {data.projects.map(p => {
-          const active = p.id === activeProject;
-          return (
-            <button key={p.id} onClick={() => { setActiveProject(p.id); setSelectedUnit(null); }} style={{
-              padding: "16px 20px", border: "none", background: "transparent",
-              borderBottom: active ? "2px solid var(--dux-amber)" : "2px solid transparent",
-              cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
-              fontSize: 13, fontWeight: active ? 700 : 500,
-              color: active ? "var(--neutral-800)" : "var(--neutral-600)",
-              fontFamily: "var(--font-display)",
-            }}>
-              <span style={{
-                fontSize: 9, padding: "2px 6px", borderRadius: 4, fontFamily: "var(--font-mono)",
-                background: active ? "var(--dux-amber-100)" : "var(--neutral-100)",
-                color: active ? "var(--dux-amber-600)" : "var(--neutral-600)",
-              }}>{p.code}</span>
-              {p.name}
-              <span style={{ fontSize: 11, color: "var(--neutral-400)", fontWeight: 500 }}>· {p.locality}</span>
-            </button>
-          );
-        })}
-        <div style={{ flex: 1 }} />
-        <div style={{ display: "flex", alignItems: "center", paddingRight: 4 }}>
+        {tabOverflow && (
+          <button onClick={() => scrollTabs(-1)} title="Scroll left" style={{ ...iconBtn, width: 28, height: 28, border: "none", flexShrink: 0 }}><Icon name="arrowL" size={15} /></button>
+        )}
+        <div ref={tabScrollRef} className="dux-tabscroll" style={{ flex: 1, minWidth: 0, display: "flex", overflowX: "auto", scrollBehavior: "smooth" }}>
+          {visibleProjects.map(p => {
+            const active = p.id === activeProject;
+            return (
+              <button key={p.id} onClick={() => { setActiveProject(p.id); setSelectedUnit(null); }} style={{
+                flexShrink: 0, whiteSpace: "nowrap",
+                padding: "16px 18px", border: "none", background: "transparent",
+                borderBottom: active ? "2px solid var(--dux-amber)" : "2px solid transparent",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
+                fontSize: 13, fontWeight: active ? 700 : 500,
+                color: active ? "var(--neutral-800)" : "var(--neutral-600)",
+                fontFamily: "var(--font-display)",
+              }}>
+                <span style={{
+                  fontSize: 9, padding: "2px 6px", borderRadius: 4, fontFamily: "var(--font-mono)",
+                  background: active ? "var(--dux-amber-100)" : "var(--neutral-100)",
+                  color: active ? "var(--dux-amber-600)" : "var(--neutral-600)",
+                }}>{p.code}</span>
+                {p.name}
+                {p.locality && <span style={{ fontSize: 11, color: "var(--neutral-400)", fontWeight: 500 }}>· {p.locality}</span>}
+              </button>
+            );
+          })}
+          {visibleProjects.length === 0 && (
+            <span style={{ padding: "16px 4px", fontSize: 13, color: "var(--neutral-400)" }}>No projects match “{projQuery}”.</span>
+          )}
+        </div>
+        {tabOverflow && (
+          <button onClick={() => scrollTabs(1)} title="Scroll right" style={{ ...iconBtn, width: 28, height: 28, border: "none", flexShrink: 0 }}><Icon name="arrowR" size={15} /></button>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, paddingLeft: 8, borderLeft: "1px solid var(--hairline)", marginLeft: 4 }}>
+          {showProjSearch && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--neutral-50)", border: "1px solid var(--hairline)", borderRadius: 8, padding: "6px 10px", width: 170 }}>
+              <Icon name="search" size={14} style={{ color: "var(--neutral-400)" }} />
+              <input value={projQuery} onChange={(e) => setProjQuery(e.target.value)} placeholder="Find project…"
+                style={{ border: 0, outline: "none", background: "transparent", flex: 1, minWidth: 0, fontSize: 13, fontFamily: "var(--font-body)" }} />
+              {projQuery && <button onClick={() => setProjQuery("")} title="Clear" style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--neutral-400)", display: "inline-flex" }}><Icon name="x" size={13} /></button>}
+            </div>
+          )}
           <Btn variant="outline" size="sm" icon="plus" onClick={() => setShowProjectModal(true)}>New project</Btn>
         </div>
       </div>
