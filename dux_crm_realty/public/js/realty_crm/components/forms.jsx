@@ -1016,3 +1016,78 @@ window.RequestShareModal = function RequestShareModal({ open, onClose, doc, onSa
     </Modal>
   );
 };
+
+// ---------- DMS: edit-document modal (rename, category, tags, shareable toggle, delete) ----------
+window.EditDocumentModal = function EditDocumentModal({ open, onClose, doc, onSaved }) {
+  const data = window.CRM_DATA;
+  const isManager = !!(data.currentUser && data.currentUser.isManager);
+  const cats = data.docCategories || ["Other"];
+  const [form, setForm] = useStateF({ title: "", category: "Other", tags: "", shareable: false });
+  const [busy, setBusy] = useStateF(false);
+  useEffectF(() => {
+    if (open && doc) setForm({ title: doc.title || "", category: doc.category || "Other",
+      tags: (doc.tags || []).join(", "), shareable: !!doc.shareable });
+  }, [open, doc]);
+  const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  if (!open || !doc) return null;
+  const liveShares = (doc.shares || []).filter(s => s.status === "Approved" || s.status === "Requested").length;
+  const finish = async () => { if (window.__refreshCRM) await window.__refreshCRM(); onSaved && await onSaved(); onClose(); };
+  const save = async () => {
+    if (!form.title.trim()) { frappe.msgprint("Title can't be empty."); return; }
+    setBusy(true);
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.update_document", args: {
+        document: doc.id, title: form.title.trim(), category: form.category,
+        tags: form.tags, shareable: form.shareable ? 1 : 0 } });
+      frappe.show_alert({ message: "Document updated", indicator: "green" });
+      await finish();
+    } catch (e) { frappe.msgprint(e.message || "Could not update document"); setBusy(false); }
+  };
+  const del = () => {
+    frappe.confirm(
+      `Delete <b>${frappe.utils ? frappe.utils.escape_html(doc.title) : doc.title}</b>? This permanently removes the file and any share links.`,
+      async () => {
+        try {
+          await frappe.call({ method: "dux_crm_realty.api.crm.delete_document", args: { document: doc.id } });
+          frappe.show_alert({ message: "Document deleted", indicator: "orange" });
+          await finish();
+        } catch (e) { frappe.msgprint(e.message || "Could not delete document"); }
+      });
+  };
+  return (
+    <Modal open={open} onClose={onClose} eyebrow="EDIT DOCUMENT" title="Edit document"
+      subtitle={doc.fileName || doc.id} width={600}
+      footer={<>
+        {isManager && <Btn variant="ghost" size="sm" icon="x" onClick={del} style={{ color: "var(--error)", marginRight: "auto" }}>Delete</Btn>}
+        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Saving…" : "Save changes"}</Btn>
+      </>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Title" required span={2} hint="This is the display name (also the downloaded file name)">
+          <Input autoFocus value={form.title} onChange={(e) => u("title", e.target.value)} />
+        </Field>
+        <Field label="Category"><Select value={form.category} onChange={(e) => u("category", e.target.value)}>{cats.map(c => <option key={c}>{c}</option>)}</Select></Field>
+        <Field label="Tags" hint="Comma-separated"><Input value={form.tags} onChange={(e) => u("tags", e.target.value)} /></Field>
+        <div style={{ gridColumn: "span 2", padding: 14, border: "1px solid var(--hairline)", borderRadius: 10, background: "var(--neutral-50)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <button onClick={(e) => { e.preventDefault(); u("shareable", !form.shareable); }} style={{
+              width: 18, height: 18, borderRadius: 5, cursor: "pointer", flexShrink: 0,
+              border: "1.5px solid " + (form.shareable ? "var(--dux-navy)" : "var(--neutral-300)"),
+              background: form.shareable ? "var(--dux-navy)" : "transparent",
+              color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center",
+            }}>{form.shareable && <Icon name="check" size={12} />}</button>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Shareable</span>
+          </label>
+          <div style={{ fontSize: 11, color: "var(--neutral-500)", marginTop: 8, display: "flex", gap: 6, alignItems: "flex-start" }}>
+            <Icon name="shield" size={13} style={{ marginTop: 1, color: "var(--dux-amber-600)" }} />
+            <span>{form.shareable
+              ? "Can be shared with leads — each share still needs a manager's approval before it goes out."
+              : (doc.shareable && liveShares
+                  ? "Turning this off will REVOKE its live share link(s) (manager only)."
+                  : "Turn on to allow sharing this document with a lead.")}</span>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+};

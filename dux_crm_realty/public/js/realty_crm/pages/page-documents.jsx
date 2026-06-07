@@ -14,6 +14,7 @@ window.PageDocuments = function PageDocuments({ search = "" }) {
   const [tagF, setTagF] = React.useState(null);
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const [shareDoc, setShareDoc] = React.useState(null);     // doc for RequestShareModal
+  const [editDoc, setEditDoc] = React.useState(null);       // doc for EditDocumentModal
   const [history, setHistory] = React.useState(null);       // { docId, rows }
 
   const q = (search || "").trim().toLowerCase();
@@ -90,7 +91,7 @@ window.PageDocuments = function PageDocuments({ search = "" }) {
           {rows.map(d => (
             <DocCard key={d.id} d={d} isManager={isManager} me={me}
               onDownload={() => downloadDocument(d.id)} onShare={() => setShareDoc(d)}
-              onHistory={() => showHistory(d.id)} act={act} />
+              onEdit={() => setEditDoc(d)} onHistory={() => showHistory(d.id)} act={act} />
           ))}
         </div>
       </div>
@@ -99,12 +100,14 @@ window.PageDocuments = function PageDocuments({ search = "" }) {
         onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
       <RequestShareModal open={!!shareDoc} doc={shareDoc} onClose={() => setShareDoc(null)}
         onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
+      <EditDocumentModal open={!!editDoc} doc={editDoc} onClose={() => setEditDoc(null)}
+        onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
       <ShareHistoryModal history={history} onClose={() => setHistory(null)} />
     </div>
   );
 };
 
-function DocCard({ d, isManager, me, onDownload, onShare, onHistory, act }) {
+function DocCard({ d, isManager, me, onDownload, onShare, onEdit, onHistory, act }) {
   const data = window.CRM_DATA;
   const proj = (data.projects || []).find(p => p.id === d.project);
   const shares = d.shares || [];
@@ -124,7 +127,10 @@ function DocCard({ d, isManager, me, onDownload, onShare, onHistory, act }) {
             {fmtBytes(d.size)} · {fmtRelative(d.at)}{d.uploadedBy ? " · " + d.uploadedBy : ""}
           </div>
         </div>
-        <button onClick={onDownload} title="Download" style={{ ...iconBtn, width: 32, height: 32, flexShrink: 0 }}><Icon name="download" size={14} /></button>
+        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+          <button onClick={onEdit} title="Edit / rename / delete" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="edit" size={14} /></button>
+          <button onClick={onDownload} title="Download" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="download" size={14} /></button>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -143,9 +149,12 @@ function DocCard({ d, isManager, me, onDownload, onShare, onHistory, act }) {
       {/* sharing */}
       <div style={{ paddingTop: 12, borderTop: "1px dashed var(--hairline)", display: "flex", flexDirection: "column", gap: 8 }}>
         {!d.shareable && (
-          <span style={{ fontSize: 12, color: "var(--neutral-400)", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Icon name="shield" size={13} /> Not marked shareable
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: "var(--neutral-400)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Icon name="shield" size={13} /> Not shareable
+            </span>
+            <Btn variant="outline" size="sm" icon="link" onClick={() => act("update_document", { document: d.id, shareable: 1 }, "Marked shareable", "green")}>Make shareable</Btn>
+          </div>
         )}
         {d.shareable && approved.length === 0 && pending.length === 0 && (
           <Btn variant="accent" size="sm" icon="link" onClick={onShare}>Share with a lead</Btn>

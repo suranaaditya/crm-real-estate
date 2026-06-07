@@ -260,6 +260,10 @@ stored per project (+ optional unit/lead/booking) as **private Frappe File attac
 manager can **revoke** (link 403s) with a full **audit trail** (`get_document_shares` — who/when/opens).
 The lead drawer **Documents tab is now real** (was static — filtered to the lead's docs, upload + request-
 share + share status + history), and the **Inventory project view** shows a per-project documents panel.
+Each document can be **edited** — rename (the title is the display + downloaded file name), change
+category/tags, **toggle shareable** (1→0 hard-revokes live shares, manager-only), or **delete** (manager) —
+via an `EditDocumentModal` (pencil button on each card / drawer row); non-shareable docs also get a
+one-click **Make shareable**. Backed by `update_document` / `delete_document`.
 A new **Approvals** sidebar page (manager-only, live pending badge = holds + shares) is the **unified
 inbox**: pending inventory hold/reserve requests AND document-share requests in one place (tabs All /
 Inventory holds / Document shares), with an Active section to **release** holds and **revoke** shares /

@@ -462,6 +462,7 @@ function DocsTab({ lead }) {
   const isManager = !!(data.currentUser && data.currentUser.isManager);
   const me = (data.currentUser && data.currentUser.name) || "";
   const [uploadOpen, setUploadOpen] = ldUseState(false);
+  const [editDoc, setEditDoc] = ldUseState(null);    // doc for EditDocumentModal
   const [cat, setCat] = ldUseState("all");
   const [q, setQ] = ldUseState("");
   const [history, setHistory] = ldUseState(null);   // { docId, rows } | null
@@ -535,7 +536,10 @@ function DocsTab({ lead }) {
                     </div>
                   )}
                 </div>
-                <button onClick={() => downloadDocument(d.id)} title="Download" style={{ ...iconBtn, width: 32, height: 32, flexShrink: 0 }}><Icon name="download" size={14} /></button>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => setEditDoc(d)} title="Edit / rename / delete" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="edit" size={14} /></button>
+                  <button onClick={() => downloadDocument(d.id)} title="Download" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="download" size={14} /></button>
+                </div>
               </div>
 
               {/* share row for THIS lead */}
@@ -566,7 +570,10 @@ function DocsTab({ lead }) {
                   </Btn>
                 )}
                 {!share && !d.shareable && (
-                  <span style={{ fontSize: 12, color: "var(--neutral-400)" }}>Not marked shareable.</span>
+                  <>
+                    <span style={{ fontSize: 12, color: "var(--neutral-400)" }}>Not shareable.</span>
+                    <Btn variant="outline" size="sm" icon="link" onClick={() => act("update_document", { document: d.id, shareable: 1 }, "Marked shareable", "green")}>Make shareable</Btn>
+                  </>
                 )}
                 <div style={{ flex: 1 }} />
                 <button onClick={() => showHistory(d.id)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: 11, fontWeight: 600, color: "var(--neutral-500)", display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -580,6 +587,8 @@ function DocsTab({ lead }) {
 
       <UploadDocumentModal open={uploadOpen} onClose={() => setUploadOpen(false)}
         project={lead.project} lead={lead.id}
+        onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
+      <EditDocumentModal open={!!editDoc} doc={editDoc} onClose={() => setEditDoc(null)}
         onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
       <ShareHistoryModal history={history} onClose={() => setHistory(null)} />
     </div>
