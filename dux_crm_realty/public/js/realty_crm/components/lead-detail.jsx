@@ -412,9 +412,10 @@ function UnitsTab({ inv, lead }) {
           const tones = {
             available: { bg: "var(--success-bg)",   fg: "var(--success)",   bd: "rgba(58,143,90,0.3)" },
             blocked:   { bg: "var(--dux-amber-100)", fg: "var(--dux-amber-600)", bd: "rgba(242,169,59,0.4)" },
+            reserved:  { bg: "var(--info-bg)",       fg: "var(--info)",      bd: "rgba(47,110,181,0.3)" },
             sold:      { bg: "var(--neutral-100)",  fg: "var(--neutral-600)", bd: "var(--hairline)" },
           };
-          const t = tones[u.status];
+          const t = tones[u.status] || tones.available;
           const isFav = u.id === "B-705";
           return (
             <div key={u.id} style={{

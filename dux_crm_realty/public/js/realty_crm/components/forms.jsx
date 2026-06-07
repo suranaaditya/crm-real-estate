@@ -332,42 +332,313 @@ window.CreateProjectModal = function CreateProjectModal({ open, onClose, onSaved
   );
 };
 
-// ---------- Add Units (inventory) modal ----------
+// ---------- Add Units (inventory) modal — uniform OR granular per-floor ----------
+const UNIT_TYPOLOGIES = ["1 BHK", "2 BHK", "3 BHK", "4 BHK", "Penthouse", "Row House", "Office Suite", "Retail Shop"];
+const UNIT_FACINGS = ["", "East", "West", "North", "South"];
+const cellInput = { padding: "7px 8px", borderRadius: 6, border: "1px solid var(--hairline)", fontSize: 12, fontFamily: "var(--font-body)", background: "var(--bg)", color: "var(--neutral-900)", outline: "none", width: "100%" };
+const newRow = () => ({ typology: "2 BHK", carpet: "", price: "", facing: "", count: "1" });
+
 window.AddUnitsModal = function AddUnitsModal({ open, onClose, project, onSaved }) {
-  const [form, setForm] = useStateF({ tower: "A", floors: "4", unitsPerFloor: "4",
-    typology: "2 BHK", carpet: "720", price: "5200000" });
-  const u = (k, v) => setForm({ ...form, [k]: v });
-  const total = (parseInt(form.floors) || 0) * (parseInt(form.unitsPerFloor) || 0);
+  const initForm = () => ({ tower: "A", floors: "4", unitsPerFloor: "4", typology: "2 BHK", carpet: "720", price: "5200000" });
+  const [form, setForm] = useStateF(initForm);
+  const [granular, setGranular] = useStateF(false);
+  const [bands, setBands] = useStateF([]);
+  useEffectF(() => { if (open) { setForm(initForm()); setGranular(false); setBands([]); } }, [open]);
+  const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const code = (project || "").replace("P-", "");
+
+  // --- band editor helpers (immutable) ---
+  const setBand = (i, patch) => setBands(bs => bs.map((b, idx) => idx === i ? { ...b, ...patch } : b));
+  const setRow = (bi, ri, patch) => setBands(bs => bs.map((b, i) => i === bi ? { ...b, rows: b.rows.map((r, j) => j === ri ? { ...r, ...patch } : r) } : b));
+  const addRow = (bi) => setBands(bs => bs.map((b, i) => i === bi ? { ...b, rows: [...b.rows, newRow()] } : b));
+  const removeRow = (bi, ri) => setBands(bs => bs.map((b, i) => i === bi ? { ...b, rows: b.rows.filter((_, j) => j !== ri) } : b));
+  const addBand = () => setBands(bs => { const maxTo = bs.reduce((m, b) => Math.max(m, parseInt(b.to) || 0), 0); const f = String(maxTo + 1); return [...bs, { from: f, to: f, rows: [newRow()] }]; });
+  const removeBand = (i) => setBands(bs => bs.filter((_, idx) => idx !== i));
+  const enableGranular = () => {
+    setBands([{ from: "1", to: form.floors || "1", rows: [{ typology: form.typology, carpet: form.carpet, price: form.price, facing: "", count: form.unitsPerFloor || "1" }] }]);
+    setGranular(true);
+  };
+
+  // --- math + validation ---
+  const perFloor = (b) => b.rows.reduce((s, r) => s + (parseInt(r.count) || 0), 0);
+  const bandFloors = (b) => { const f = parseInt(b.from) || 0, t = parseInt(b.to) || 0; return f && t && t >= f ? (t - f + 1) : 0; };
+  const bandTotal = (b) => perFloor(b) * bandFloors(b);
+  const uniformTotal = (parseInt(form.floors) || 0) * (parseInt(form.unitsPerFloor) || 0);
+  const grandTotal = granular ? bands.reduce((s, b) => s + bandTotal(b), 0) : uniformTotal;
+
+  const errors = [];
+  if (granular) {
+    const seen = {};
+    bands.forEach((b, i) => {
+      const f = parseInt(b.from) || 0, t = parseInt(b.to) || 0;
+      if (f < 1) errors.push(`Band ${i + 1}: from-floor must be 1 or more`);
+      else if (t < f) errors.push(`Band ${i + 1}: to-floor must be ≥ from-floor`);
+      else { for (let fl = f; fl <= t; fl++) { if (seen[fl] != null) errors.push(`Floor ${fl} is in more than one band`); seen[fl] = i; } }
+      if (perFloor(b) > 99) errors.push(`Band ${i + 1}: more than 99 units per floor`);
+    });
+    if (grandTotal === 0) errors.push("Add at least one unit");
+  }
+  const canSave = granular ? errors.length === 0 && grandTotal > 0 : uniformTotal > 0;
+
   const save = async () => {
+    if (!canSave) return;
+    let payload;
+    if (granular && grandTotal > 0) {
+      payload = {
+        project, tower: form.tower,
+        carpetDefault: form.carpet, priceDefault: form.price,
+        bands: bands.map(b => ({
+          from: parseInt(b.from) || 0, to: parseInt(b.to) || 0,
+          rows: b.rows.filter(r => (parseInt(r.count) || 0) > 0).map(r => ({
+            typology: r.typology, carpet: r.carpet, price: r.price, facing: r.facing, count: parseInt(r.count) || 1,
+          })),
+        })),
+      };
+    } else {
+      payload = { ...form, project };  // legacy uniform path
+    }
     try {
-      const r = await frappe.call({ method: "dux_crm_realty.api.crm.add_units", args: { payload: { ...form, project } } });
-      frappe.show_alert({ message: r.message.created + " units added to " + code, indicator: "green" });
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.add_units", args: { payload } });
+      const msg = r.message.created + " units added to " + code + (r.message.skipped ? " (" + r.message.skipped + " already existed)" : "");
+      frappe.show_alert({ message: msg, indicator: "green" });
       onSaved && await onSaved(r.message);
       onClose();
     } catch (ex) { frappe.msgprint(ex.message || "Could not add units"); }
   };
+
   return (
     <Modal open={open} onClose={onClose} eyebrow="ADD INVENTORY" title={"Add units to " + code}
-      subtitle="Generate a tower's units in one step." width={680}
+      subtitle="Set a uniform tower, or a per-floor mix for varied layouts." width={720}
       footer={<>
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="plus" onClick={save}>Add {total} units</Btn>
+        <Btn variant="accent" size="sm" icon="plus" onClick={save}
+          style={{ opacity: canSave ? 1 : 0.5, pointerEvents: canSave ? "auto" : "none" }}>
+          Add {grandTotal} unit{grandTotal === 1 ? "" : "s"}
+        </Btn>
       </>}>
+      {/* Tower-wide defaults (uniform mode = the whole submission) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Field label="Tower" hint="A single letter or code"><Input value={form.tower} onChange={(e) => u("tower", e.target.value.toUpperCase())} /></Field>
-        <Field label="Typology">
+        <Field label={granular ? "Default typology" : "Typology"}>
           <Select value={form.typology} onChange={(e) => u("typology", e.target.value)}>
-            {["1 BHK", "2 BHK", "3 BHK", "4 BHK", "Row House", "Office Suite", "Retail Shop"].map(t => <option key={t}>{t}</option>)}
+            {UNIT_TYPOLOGIES.map(t => <option key={t}>{t}</option>)}
           </Select>
         </Field>
-        <Field label="Floors"><Input type="number" value={form.floors} onChange={(e) => u("floors", e.target.value)} /></Field>
-        <Field label="Units per floor"><Input type="number" value={form.unitsPerFloor} onChange={(e) => u("unitsPerFloor", e.target.value)} /></Field>
-        <Field label="Carpet area (sqft)"><Input type="number" value={form.carpet} onChange={(e) => u("carpet", e.target.value)} /></Field>
-        <Field label="Price (₹)"><Input type="number" value={form.price} onChange={(e) => u("price", e.target.value)} /></Field>
+        {!granular && <Field label="Floors"><Input type="number" min="1" value={form.floors} onChange={(e) => u("floors", e.target.value)} /></Field>}
+        {!granular && <Field label="Units per floor"><Input type="number" min="1" value={form.unitsPerFloor} onChange={(e) => u("unitsPerFloor", e.target.value)} /></Field>}
+        <Field label={granular ? "Default carpet (sqft)" : "Carpet area (sqft)"}><Input type="number" value={form.carpet} onChange={(e) => u("carpet", e.target.value)} /></Field>
+        <Field label={granular ? "Default price (₹)" : "Price (₹)"}><Input type="number" value={form.price} onChange={(e) => u("price", e.target.value)} /></Field>
       </div>
-      <div style={{ marginTop: 16, padding: 12, background: "var(--neutral-50)", borderRadius: 10, fontSize: 13, color: "var(--neutral-600)" }}>
-        Generates <strong style={{ color: "var(--neutral-800)" }}>{total}</strong> available units in Tower {form.tower} ({form.floors} floors × {form.unitsPerFloor} per floor).
+
+      {/* Progressive disclosure toggle */}
+      <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 10 }}>
+        {!granular ? (
+          <button onClick={enableGranular} style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "1px dashed var(--hairline)", background: "var(--neutral-50)", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "var(--font-display)", color: "var(--dux-navy)" }}>
+            <Icon name="chevronD" size={14} /> Floors vary? Set a per-floor mix
+          </button>
+        ) : (
+          <button onClick={() => setGranular(false)} style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--neutral-500)" }}>
+            ← Back to a uniform tower
+          </button>
+        )}
+      </div>
+
+      {/* Band editor */}
+      {granular && (
+        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+          {bands.map((b, bi) => (
+            <div key={bi} style={{ border: "1px solid var(--hairline)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: "var(--neutral-50)", borderBottom: "1px solid var(--hairline)" }}>
+                <span style={{ ...drawerEyebrow }}>Floors</span>
+                <input type="number" min="1" value={b.from} onChange={(e) => setBand(bi, { from: e.target.value })} style={{ ...cellInput, width: 64 }} />
+                <span style={{ color: "var(--neutral-400)" }}>–</span>
+                <input type="number" min="1" value={b.to} onChange={(e) => setBand(bi, { to: e.target.value })} style={{ ...cellInput, width: 64 }} />
+                <span style={{ fontSize: 11, color: "var(--neutral-500)" }}>
+                  {bandFloors(b) === 1 ? "Single floor (penthouse / amenity)" : bandFloors(b) > 1 ? `${bandFloors(b)} floors` : "—"}
+                </span>
+                <div style={{ flex: 1 }} />
+                <span style={{ fontSize: 11, color: "var(--neutral-600)" }}>{perFloor(b)}/floor · <strong>{bandTotal(b)}</strong> total</span>
+                {bands.length > 1 && <button onClick={() => removeBand(bi)} title="Remove band" style={{ ...iconBtn, width: 26, height: 26 }}><Icon name="x" size={13} /></button>}
+              </div>
+              <div style={{ padding: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 1.1fr 1fr 0.7fr 28px", gap: 8, marginBottom: 6 }}>
+                  {["Typology", "Carpet", "Price ₹", "Facing", "Per floor", ""].map((h, i) => (
+                    <span key={i} style={{ ...drawerEyebrow, fontSize: 9 }}>{h}</span>
+                  ))}
+                </div>
+                {b.rows.map((r, ri) => (
+                  <div key={ri} style={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 1.1fr 1fr 0.7fr 28px", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                    <select value={r.typology} onChange={(e) => setRow(bi, ri, { typology: e.target.value })} style={{ ...cellInput, cursor: "pointer" }}>
+                      {UNIT_TYPOLOGIES.map(t => <option key={t}>{t}</option>)}
+                    </select>
+                    <input type="number" placeholder={form.carpet || "720"} value={r.carpet} onChange={(e) => setRow(bi, ri, { carpet: e.target.value })} style={cellInput} />
+                    <input type="number" placeholder={form.price || "—"} value={r.price} onChange={(e) => setRow(bi, ri, { price: e.target.value })} style={cellInput} />
+                    <select value={r.facing} onChange={(e) => setRow(bi, ri, { facing: e.target.value })} style={{ ...cellInput, cursor: "pointer" }}>
+                      {UNIT_FACINGS.map(fc => <option key={fc} value={fc}>{fc || "Auto"}</option>)}
+                    </select>
+                    <input type="number" min="1" value={r.count} onChange={(e) => setRow(bi, ri, { count: e.target.value })} style={cellInput} />
+                    {b.rows.length > 1
+                      ? <button onClick={() => removeRow(bi, ri)} title="Remove" style={{ ...iconBtn, width: 26, height: 26, border: "none" }}><Icon name="x" size={12} /></button>
+                      : <span />}
+                  </div>
+                ))}
+                <button onClick={() => addRow(bi)} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--dux-amber-600)", padding: "2px 0" }}>+ Add unit type</button>
+              </div>
+            </div>
+          ))}
+          <button onClick={addBand} style={{ border: "1px dashed var(--hairline)", background: "var(--neutral-50)", borderRadius: 10, padding: "10px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "var(--font-display)", color: "var(--dux-navy)" }}>
+            + Add another floor band
+          </button>
+        </div>
+      )}
+
+      {/* Summary / errors */}
+      <div style={{ marginTop: 16, padding: 12, background: errors.length ? "var(--error-bg)" : "var(--neutral-50)", borderRadius: 10, fontSize: 13, color: errors.length ? "var(--error)" : "var(--neutral-600)" }}>
+        {errors.length
+          ? errors[0]
+          : <>Generates <strong style={{ color: "var(--neutral-800)" }}>{grandTotal}</strong> available unit{grandTotal === 1 ? "" : "s"} in Tower {form.tower || "?"}{!granular && <> ({form.floors} floors × {form.unitsPerFloor} per floor)</>}.</>}
+      </div>
+    </Modal>
+  );
+};
+const drawerEyebrow = { fontFamily: "var(--font-display)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", fontSize: 10, color: "var(--neutral-400)" };
+
+// ---------- Reusable lead picker (project filter + search) ----------
+window.LeadPicker = function LeadPicker({ value, onChange, defaultProject }) {
+  const data = window.CRM_DATA;
+  const [query, setQuery] = useStateF("");
+  const [projectF, setProjectF] = useStateF(defaultProject && (data.projects || []).some(p => p.id === defaultProject) ? defaultProject : "all");
+  const picked = value ? (data.leads || []).find(l => l.id === value) : null;
+  const matches = !value ? (data.leads || []).filter(l => {
+    if (projectF !== "all" && l.project !== projectF) return false;
+    const q = query.trim().toLowerCase();
+    if (q && !`${l.name} ${l.id} ${l.phone || ""} ${l.projectName || ""}`.toLowerCase().includes(q)) return false;
+    return true;
+  }).slice(0, 6) : [];
+  if (picked) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--neutral-50)" }}>
+        <Avatar name={picked.name} initials={picked.initials} size={28} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{picked.name}</div>
+          <div style={{ fontSize: 11, color: "var(--neutral-400)", fontFamily: "var(--font-mono)" }}>{picked.id} · {picked.projectName || "—"}</div>
+        </div>
+        <button onClick={() => onChange("")} title="Clear" style={{ ...iconBtn, width: 28, height: 28 }}><Icon name="x" size={14} /></button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Select value={projectF} onChange={(e) => setProjectF(e.target.value)} style={{ flex: "0 0 40%" }}>
+          <option value="all">All projects</option>
+          {(data.projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </Select>
+        <Input placeholder="Search name, phone, ID…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ flex: 1 }} />
+      </div>
+      <div style={{ marginTop: 8, maxHeight: 168, overflowY: "auto", border: "1px solid var(--hairline)", borderRadius: 8 }}>
+        {matches.length === 0 && <div style={{ padding: "12px", fontSize: 12, color: "var(--neutral-400)" }}>No leads match — adjust the project or search.</div>}
+        {matches.map(l => (
+          <button key={l.id} onClick={() => onChange(l.id)} style={{
+            display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "8px 10px",
+            border: 0, borderBottom: "1px solid var(--hairline)", background: "transparent", cursor: "pointer", textAlign: "left",
+          }}
+            onMouseEnter={(e) => e.currentTarget.style.background = "var(--neutral-50)"}
+            onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+            <Avatar name={l.name} initials={l.initials} size={26} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--neutral-800)" }}>{l.name}</div>
+              <div style={{ fontSize: 11, color: "var(--neutral-400)", fontFamily: "var(--font-mono)" }}>{l.id} · {l.projectName || "—"}{l.phone ? " · " + l.phone : ""}</div>
+            </div>
+            <StageBadge stage={l.stage} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ---------- Hold / Reserve request modal (inventory) ----------
+window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initialKind, onSaved }) {
+  const data = window.CRM_DATA;
+  const [kind, setKind] = useStateF(initialKind || "Hold");
+  const [mode, setMode] = useStateF("lead");   // lead | outside
+  const [lead, setLead] = useStateF("");
+  const [contactName, setContactName] = useStateF("");
+  const [contactPhone, setContactPhone] = useStateF("");
+  const [requestedBy, setRequestedBy] = useStateF("");
+  const [note, setNote] = useStateF("");
+  const [busy, setBusy] = useStateF(false);
+  useEffectF(() => {
+    if (open) {
+      setKind(initialKind || "Hold"); setMode("lead"); setLead(""); setContactName("");
+      setContactPhone(""); setNote(""); setBusy(false);
+      setRequestedBy((data.currentUser && data.currentUser.name) || ((data.owners || [])[0] || {}).name || "");
+    }
+  }, [open, initialKind]);
+  if (!open || !unit) return null;
+  const code = (unit.id || "").split("-")[0];
+  const save = async () => {
+    if (mode === "lead" && !lead) { frappe.msgprint("Pick a lead, or switch to an outside enquiry."); return; }
+    if (mode === "outside" && !contactName.trim()) { frappe.msgprint("Enter the outside contact name."); return; }
+    setBusy(true);
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.request_hold", args: {
+        unit_id: unit.id, kind,
+        lead: mode === "lead" ? lead : null,
+        contact_name: mode === "outside" ? contactName : null,
+        contact_phone: mode === "outside" ? contactPhone : null,
+        requested_by: requestedBy, note,
+      } });
+      frappe.show_alert({ message: kind + " requested for " + unit.id + " — pending approval", indicator: "blue" });
+      onSaved && await onSaved();
+      onClose();
+    } catch (e) { frappe.msgprint(e.message || "Could not submit the request"); setBusy(false); }
+  };
+  const Toggle = ({ options, value, onChange }) => (
+    <div style={{ display: "inline-flex", padding: 3, background: "var(--neutral-100)", borderRadius: 8, gap: 2 }}>
+      {options.map(o => (
+        <button key={o.value} onClick={() => onChange(o.value)} style={{
+          padding: "7px 16px", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600,
+          fontFamily: "var(--font-display)", background: value === o.value ? "var(--bg)" : "transparent",
+          color: value === o.value ? "var(--neutral-800)" : "var(--neutral-600)",
+          boxShadow: value === o.value ? "var(--shadow-xs)" : "none",
+        }}>{o.label}</button>
+      ))}
+    </div>
+  );
+  return (
+    <Modal open={open} onClose={onClose} eyebrow="REQUEST" title={"Request " + kind.toLowerCase() + " · " + (unit.tower + "-" + unit.num)}
+      subtitle={"Goes to a manager for approval. " + code + " · " + (unit.typology || "")} width={600}
+      footer={<>
+        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Submitting…" : "Submit request"}</Btn>
+      </>}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <Field label="What are you requesting?">
+          <Toggle value={kind} onChange={setKind} options={[{ value: "Hold", label: "Hold" }, { value: "Reserve", label: "Reserve" }]} />
+        </Field>
+        <Field label="For" hint="Link a CRM lead, or capture an outside enquiry that isn’t a lead yet">
+          <Toggle value={mode} onChange={setMode} options={[{ value: "lead", label: "Existing lead" }, { value: "outside", label: "Outside enquiry" }]} />
+        </Field>
+        {mode === "lead" ? (
+          <Field label="Lead">
+            <LeadPicker value={lead} onChange={setLead} defaultProject={unit.project} />
+          </Field>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <Field label="Contact name" required><Input autoFocus placeholder="e.g. Walk-in — Mr. Shah" value={contactName} onChange={(e) => setContactName(e.target.value)} /></Field>
+            <Field label="Contact phone"><Input placeholder="+91…" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} /></Field>
+          </div>
+        )}
+        <Field label="Requested by" hint="Defaults to you; a manager can file on behalf of a rep">
+          <Select value={requestedBy} onChange={(e) => setRequestedBy(e.target.value)}>
+            {(data.owners || []).map(o => <option key={o.id} value={o.name}>{o.name}{o.role ? " · " + o.role : ""}</option>)}
+          </Select>
+        </Field>
+        <Field label="Note" hint="Optional — context for the approver / next person">
+          <Textarea rows={2} placeholder="Why this hold, until when, etc." value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
       </div>
     </Modal>
   );
@@ -381,15 +652,18 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
     title: "", type: "Follow-up call", date: defaultDate || (data.today || ""),
     time: "10:00", priority: "med",
     assignedTo: defaultOwner || (data.currentUser && data.currentUser.name) || "",
-    notes: "",
+    lead: "", notes: "",
   });
   const [form, setForm] = useStateF(init);
-  useEffectF(() => { if (open) setForm(init()); }, [open, defaultDate, defaultOwner]);
+  // lead-picker filters (only used when no lead is pre-linked, e.g. from My Day)
+  const [leadQuery, setLeadQuery] = useStateF("");
+  const [leadProject, setLeadProject] = useStateF("all");
+  useEffectF(() => { if (open) { setForm(init()); setLeadQuery(""); setLeadProject("all"); } }, [open, defaultDate, defaultOwner]);
   const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const save = async () => {
     if (!form.title.trim()) { frappe.msgprint("Task title is required."); return; }
     try {
-      await frappe.call({ method: "dux_crm_realty.api.crm.create_task", args: { payload: { ...form, lead: lead ? lead.id : null } } });
+      await frappe.call({ method: "dux_crm_realty.api.crm.create_task", args: { payload: { ...form, lead: lead ? lead.id : (form.lead || null) } } });
       frappe.show_alert({ message: "Task created", indicator: "green" });
       onSaved && await onSaved();
       onClose();
@@ -397,6 +671,14 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
   };
   if (!open) return null;
   const PRI = [["low", "Low"], ["med", "Medium"], ["high", "High"]];
+  // selected linked lead (when picking from My Day) + the filtered candidate list
+  const pickedLead = (!lead && form.lead) ? (data.leads || []).find(l => l.id === form.lead) : null;
+  const leadMatches = (!lead && !form.lead) ? (data.leads || []).filter(l => {
+    if (leadProject !== "all" && l.project !== leadProject) return false;
+    const q = leadQuery.trim().toLowerCase();
+    if (q && !`${l.name} ${l.id} ${l.phone || ""} ${l.projectName || ""}`.toLowerCase().includes(q)) return false;
+    return true;
+  }).slice(0, 6) : [];
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,26,46,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 620, maxWidth: "92%", maxHeight: "92%", display: "flex", flexDirection: "column", background: "var(--bg)", borderRadius: 14, boxShadow: "var(--shadow-xl)", overflow: "hidden" }}>
@@ -432,6 +714,49 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
                 })}
               </div>
             </Field>
+            {!lead && (
+              <Field label="Link to a lead" span={2} hint="Optional — connects this task to a lead so it also appears on the lead’s Tasks tab">
+                {pickedLead ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--neutral-50)" }}>
+                    <Avatar name={pickedLead.name} initials={pickedLead.initials} size={28} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{pickedLead.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--neutral-400)", fontFamily: "var(--font-mono)" }}>{pickedLead.id} · {pickedLead.projectName || "—"}</div>
+                    </div>
+                    <button onClick={() => u("lead", "")} title="Unlink" style={{ ...iconBtn, width: 28, height: 28 }}><Icon name="x" size={14} /></button>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Select value={leadProject} onChange={(e) => setLeadProject(e.target.value)} style={{ flex: "0 0 40%" }}>
+                        <option value="all">All projects</option>
+                        {(data.projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </Select>
+                      <Input placeholder="Search name, phone, ID…" value={leadQuery} onChange={(e) => setLeadQuery(e.target.value)} style={{ flex: 1 }} />
+                    </div>
+                    <div style={{ marginTop: 8, maxHeight: 168, overflowY: "auto", border: "1px solid var(--hairline)", borderRadius: 8 }}>
+                      {leadMatches.length === 0 && <div style={{ padding: "12px 12px", fontSize: 12, color: "var(--neutral-400)" }}>No leads match — adjust the project or search.</div>}
+                      {leadMatches.map(l => (
+                        <button key={l.id} onClick={() => u("lead", l.id)} style={{
+                          display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "8px 10px",
+                          border: 0, borderBottom: "1px solid var(--hairline)", background: "transparent",
+                          cursor: "pointer", textAlign: "left",
+                        }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = "var(--neutral-50)"}
+                          onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                          <Avatar name={l.name} initials={l.initials} size={26} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--neutral-800)" }}>{l.name}</div>
+                            <div style={{ fontSize: 11, color: "var(--neutral-400)", fontFamily: "var(--font-mono)" }}>{l.id} · {l.projectName || "—"}{l.phone ? " · " + l.phone : ""}</div>
+                          </div>
+                          <StageBadge stage={l.stage} />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Field>
+            )}
             <Field label="Notes" span={2}><Textarea rows={3} placeholder="Optional details…" value={form.notes} onChange={(e) => u("notes", e.target.value)} /></Field>
           </div>
         </div>

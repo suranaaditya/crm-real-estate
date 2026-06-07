@@ -291,3 +291,15 @@
    shell owns the viewport below the desk navbar. */
 .page-container[data-page-route="realty-crm"] .page-head,
 [data-page-route="realty-crm"] .page-head { display: none !important; }
+
+/* Hide the Frappe desk's own 50px sidebar ONLY while the CRM page is the active
+   route (the CRM ships its own navy sidebar). Scoped to a body class toggled by
+   realty_crm.js lifecycle hooks, so the rule is inert on every other desk page,
+   app and user — it never matches when the class is absent. The sidebar lives
+   OUTSIDE the page-container, so a body-level scope is required (a
+   [data-page-route] selector could never reach it). */
+body.realty-crm-active .body-sidebar-container,
+body.realty-crm-active .body-sidebar { display: none !important; }
+/* Removing the flex sibling lets the main content reflow full-width; this is
+   belt-and-suspenders in case a theme sets an explicit width. */
+body.realty-crm-active .layout-main { width: 100%; }

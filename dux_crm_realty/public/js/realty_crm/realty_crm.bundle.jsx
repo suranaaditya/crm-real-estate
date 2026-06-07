@@ -16,7 +16,6 @@ import "./components/lead-detail.jsx";
 import "./pages/direction-a.jsx";
 import "./pages/page-calendar.jsx";
 import "./pages/page-dashboard.jsx";
-import "./pages/page-visits.jsx";
 import "./pages/page-inventory.jsx";
 import "./pages/page-bookings.jsx";
 import "./pages/page-payments.jsx";

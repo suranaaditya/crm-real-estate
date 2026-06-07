@@ -22,6 +22,38 @@ CRM_ROLES = (
 STAGE_ORDER = ["new", "contacted", "qualified", "visit", "negotiation", "booked", "lost"]
 BOOKING_STAGES = ["token-received", "agreement-signed", "registration-pending", "registered"]
 
+# Unit lifecycle. A unit moves Available <-> Blocked (hold) <-> Reserved (token/intent)
+# and on to Sold; Sold is reversible only by a manager (revenue-affecting unwind).
+ALLOWED_UNIT_STATUS = ("Available", "Blocked", "Reserved", "Sold")
+_UNIT_TRANSITIONS = {
+	"Available": {"Blocked", "Reserved", "Sold"},
+	"Blocked": {"Available", "Reserved", "Sold"},
+	"Reserved": {"Available", "Blocked", "Sold"},
+	"Sold": {"Available"},  # unwind/cancel — manager/admin only (enforced below)
+}
+MANAGER_ROLES = ("Realty Sales Manager", "Realty Admin", "System Manager")
+_UNIT_UNWIND_ROLES = MANAGER_ROLES
+# A hold's "kind" maps to the unit status its approval produces.
+KIND_TO_STATUS = {"Hold": "Blocked", "Reserve": "Reserved"}
+
+
+def _is_manager():
+	return any(r in MANAGER_ROLES for r in frappe.get_roles())
+
+
+def _actor_owner():
+	"""The acting Realty Sales Owner for the session user, for hold attribution.
+
+	Resolves via the Sales Owner's ``user`` link; falls back to the pinned demo
+	persona when the rep has no Frappe login yet. NOTE: with a single shared login
+	the actor collapses to one identity — real per-rep enforcement needs each rep
+	mapped to a Frappe User (see CLAUDE.md). Approvals still gate on real roles.
+	"""
+	name = frappe.db.get_value("Realty Sales Owner", {"user": frappe.session.user}, "full_name")
+	if name:
+		return name
+	return _current_owner().get("name")
+
 # Static illustrative documents (prototype lead-detail DocsTab is global).
 DOCUMENTS = [
 	{"name": "Cost-Sheet_AN_Tower-B_705_v3.pdf", "size": "412 KB", "at": "2026-04-28"},
@@ -72,13 +104,13 @@ def get_bootstrap():
 
 	# ---- masters / lookups ----
 	owners = frappe.get_all("Realty Sales Owner",
-		fields=["full_name", "owner_id", "role", "initials"], order_by="owner_id")
+		fields=["full_name", "owner_id", "role", "initials", "phone"], order_by="owner_id")
 	owner_by_name = {o.full_name: o for o in owners}
 
 	projects_raw = frappe.get_all("Realty Project", fields=[
 		"project_code", "project_name", "project_type", "city", "locality",
 		"typology", "possession", "towers_count", "total_units", "sold",
-		"blocked", "available", "price_from", "price_to"], order_by="project_code")
+		"blocked", "reserved", "available", "price_from", "price_to"], order_by="project_code")
 	proj_name_by_code = {p.project_code: p.project_name for p in projects_raw}
 
 	partners = frappe.get_all("Realty Channel Partner", fields=[
@@ -102,14 +134,21 @@ def get_bootstrap():
 	acts = _grouped("Realty Lead Activity", ["activity_datetime", "who", "activity_type", "text"])
 	costs = _grouped("Realty Cost Sheet Item", ["label", "amount"])
 
+	# lead -> (lead_id, project) lookup so tasks can carry their lead's prototype
+	# id + project — lets the calendar filter tasks by project and open the linked lead
+	_lead_lookup = {l.name: l for l in frappe.get_all(
+		"Realty Lead", fields=["name", "lead_id", "project"])}
+
 	# standalone tasks (drive the personal calendar) — shaped, grouped by lead + kept whole
 	def _shape_task(t):
 		o = owner_by_name.get(t.assigned_to) or {}
+		ll = _lead_lookup.get(t.lead) or {}
 		return {"id": t.task_id, "title": t.title, "type": t.task_type, "status": t.status,
 			"done": t.status == "Done", "priority": t.priority, "assignedTo": t.assigned_to,
 			"assignedToInitials": o.get("initials"), "ownerName": t.assigned_to,
 			"due": _s(t.due_date), "dueDate": _s(t.due_date), "dueTime": _s(t.due_time),
-			"lead": t.lead, "leadName": t.lead_name, "notes": t.notes}
+			"lead": t.lead, "leadId": ll.get("lead_id"), "leadName": t.lead_name,
+			"project": _pid(ll.get("project")), "notes": t.notes}
 	rtasks_all = frappe.get_all("Realty Task", fields=["task_id", "title", "task_type", "status",
 		"priority", "assigned_to", "due_date", "due_time", "lead", "lead_name", "notes"],
 		order_by="due_date asc, due_time asc")
@@ -159,12 +198,40 @@ def get_bootstrap():
 	units_raw = frappe.get_all("Realty Unit", fields=[
 		"unit_id", "project", "tower", "floor", "unit_no", "typology", "carpet_area",
 		"facing", "price", "status"], order_by="project asc, tower asc, floor asc, unit_no asc")
+	unit_proj = {u.unit_id: _pid(u.project) for u in units_raw}
+
+	# active holds (Requested/Approved) — ONE batched query, grouped by unit, so the
+	# inventory panel renders attribution without N+1. Each unit carries 0-2 active
+	# holds (≤1 Approved + ≤1 Requested). pendingHolds powers the manager approvals view.
+	def _shape_hold(h):
+		o = owner_by_name.get(h.requested_by) or {}
+		ll = _lead_lookup.get(h.lead) or {}
+		return {"id": h.hold_id, "kind": h.kind, "status": h.status,
+			"requestedBy": h.requested_by, "requestedByRole": o.get("role"),
+			"requestedByInitials": o.get("initials"), "requestedByPhone": o.get("phone"),
+			"requestedOn": _s(h.requested_on), "approvedBy": h.approved_by,
+			"lead": h.lead, "leadId": ll.get("lead_id"), "leadName": h.lead_name,
+			"isOutside": not bool(h.lead), "contactName": h.contact_name,
+			"contactPhone": h.contact_phone, "note": h.note,
+			"unit": h.unit, "project": unit_proj.get(h.unit)}
+	holds_by_unit, pending_holds = {}, []
+	for h in frappe.get_all("Realty Unit Hold",
+			filters={"status": ["in", ["Requested", "Approved"]]},
+			fields=["hold_id", "unit", "kind", "status", "requested_by", "requested_on",
+				"approved_by", "lead", "lead_name", "contact_name", "contact_phone", "note"],
+			order_by="creation asc"):
+		sh = _shape_hold(h)
+		holds_by_unit.setdefault(h.unit, []).append(sh)
+		if h.status == "Requested":
+			pending_holds.append(sh)
+
 	grids = {}
 	floor7b = []
 	for u in units_raw:
 		unit = {"id": u.unit_id, "tower": u.tower, "floor": u.floor, "num": u.unit_no,
 			"typology": u.typology, "carpet": u.carpet_area, "facing": u.facing,
-			"price": u.price, "status": (u.status or "").lower()}
+			"price": u.price, "status": (u.status or "").lower(),
+			"holds": holds_by_unit.get(u.unit_id, [])}
 		grids.setdefault(_pid(u.project), {}).setdefault(u.tower, {}).setdefault(u.floor, []).append(unit)
 		if u.project == "AN" and u.tower == "B" and u.floor == 7:
 			floor7b.append(unit)
@@ -238,7 +305,7 @@ def get_bootstrap():
 		"id": _pid(p.project_code), "code": p.project_code, "name": p.project_name,
 		"type": p.project_type, "city": p.city, "locality": p.locality,
 		"towers": p.towers_count, "totalUnits": p.total_units, "sold": p.sold,
-		"blocked": p.blocked, "available": p.available, "typology": p.typology,
+		"blocked": p.blocked, "reserved": p.reserved, "available": p.available, "typology": p.typology,
 		"priceFrom": p.price_from, "priceTo": p.price_to, "possession": p.possession}
 		for p in projects_raw]
 
@@ -254,15 +321,17 @@ def get_bootstrap():
 
 	return {
 		"today": "2026-04-29",
-		"currentUser": _current_owner(),
+		"currentUser": {**_current_owner(), "isManager": _is_manager()},
 		"tasks": all_tasks,
 		"activity": focused["activities"] if focused else [],
 		"projects": projects, "sources": sources, "stages": stages, "owners": [
-			{"id": o.owner_id, "name": o.full_name, "role": o.role, "initials": o.initials}
+			{"id": o.owner_id, "name": o.full_name, "role": o.role, "initials": o.initials,
+			 "phone": o.phone}
 			for o in owners],
 		"channelPartners": channel_partners, "leads": leads, "documents": DOCUMENTS,
 		"inventory": {"P-AN": {"towers": an_towers, "units": floor7b}},
-		"abhimanGrid": grid, "grids": grids, "visits": visits, "bookings": bookings,
+		"abhimanGrid": grid, "grids": grids, "pendingHolds": pending_holds,
+		"visits": visits, "bookings": bookings,
 		"paymentTemplate": payment_template, "paymentDues": payment_dues,
 		"campaigns": campaigns,
 	}
@@ -469,23 +538,239 @@ def toggle_task(lead, task_index):
 
 
 @frappe.whitelist()
-def block_unit(unit_id):
+def set_unit_status(unit_id, status, note=None):
+	"""Set a unit to an explicit status (Available/Blocked/Reserved/Sold).
+
+	Replaces the old toggle: the inventory panel sends the exact target. Validates
+	the target + the transition, gates a Sold-unwind behind a manager role, then
+	recomputes the project rollups. ``block_unit`` delegates here for back-compat.
+	"""
 	_guard()
+	# case-insensitive match against the allowed set (avoids brittle .title())
+	target = next((s for s in ALLOWED_UNIT_STATUS
+		if s.lower() == (status or "").strip().lower()), None)
+	if not target:
+		frappe.throw(_("Invalid unit status: {0}").format(status))
+	# lock the unit row first → serialize against the hold endpoints
+	frappe.db.get_value("Realty Unit", unit_id, "status", for_update=True)
 	unit = frappe.get_doc("Realty Unit", unit_id)
 	unit.check_permission("write")
-	unit.status = "Available" if unit.status == "Blocked" else "Blocked"
+	current = unit.status or "Available"
+	if current == target:
+		return {"ok": True, "unit": unit_id, "status": target.lower(), "unchanged": True}
+	if target not in _UNIT_TRANSITIONS.get(current, set()):
+		frappe.throw(_("Cannot move a unit from {0} to {1}.").format(current, target))
+	# unwinding a sale reverses revenue — restrict to managers/admins
+	if current == "Sold" and not _is_manager():
+		frappe.throw(_("Only a manager can release a sold unit."), frappe.PermissionError)
+	unit.status = target
 	unit.save()
+	# keep the hold ledger consistent: a manual move to Sold/Available closes any
+	# active hold/request so unit.status and the ledger can never contradict.
+	if target in ("Sold", "Available"):
+		_close_active_holds(unit_id, "Overridden" if target == "Sold" else "Released",
+			"Marked sold" if target == "Sold" else "Released")
 	_recompute_project_counts(unit.project)
 	frappe.db.commit()
-	return {"ok": True, "unit": unit_id, "status": unit.status.lower()}
+	return {"ok": True, "unit": unit_id, "status": target.lower()}
+
+
+@frappe.whitelist()
+def block_unit(unit_id):
+	"""Back-compat shim: toggle Available <-> Blocked via set_unit_status."""
+	_guard()
+	current = frappe.db.get_value("Realty Unit", unit_id, "status")
+	return set_unit_status(unit_id, "Available" if current == "Blocked" else "Blocked")
+
+
+# --------------------------------------------------------------------------- #
+# unit hold / reserve workflow (request -> manager approval; holder hand-over)
+# --------------------------------------------------------------------------- #
+def _active_holds(unit_id):
+	"""Active holds (Requested/Approved) for a unit. Invariant after each endpoint:
+	at most one Approved + at most one Requested per unit."""
+	return frappe.get_all("Realty Unit Hold",
+		filters={"unit": unit_id, "status": ["in", ["Requested", "Approved"]]},
+		fields=["name", "hold_id", "kind", "status", "requested_by"], order_by="creation asc")
+
+
+def _get_hold(hold_id):
+	if frappe.db.exists("Realty Unit Hold", hold_id):
+		return frappe.get_doc("Realty Unit Hold", hold_id)
+	name = frappe.db.get_value("Realty Unit Hold", {"hold_id": hold_id}, "name")
+	if not name:
+		frappe.throw(_("Hold {0} not found.").format(hold_id))
+	return frappe.get_doc("Realty Unit Hold", name)
+
+
+def _close_active_holds(unit_id, status, reason, exclude=None):
+	"""Close every active hold on a unit (used when the approved slot is vacated)."""
+	who = _actor_owner()
+	for h in _active_holds(unit_id):
+		if exclude and h.name == exclude:
+			continue
+		d = frappe.get_doc("Realty Unit Hold", h.name)
+		d.status = status
+		d.closed_by = who
+		d.closed_on = frappe.utils.now()
+		d.close_reason = reason
+		d.save(ignore_permissions=True)
+
+
+@frappe.whitelist()
+def request_hold(unit_id, kind, lead=None, contact_name=None, contact_phone=None, note=None, requested_by=None):
+	"""A team member asks to Hold/Reserve a unit (for a lead OR an outside enquiry).
+
+	Creates a *pending* request (never auto-approves) — a manager (or, for a unit
+	already held, its current holder) approves it. Locks the unit row so concurrent
+	requests can't both pass the one-pending-per-unit guard.
+	"""
+	_guard()
+	kind = (kind or "").strip().title()
+	if kind not in KIND_TO_STATUS:
+		frappe.throw(_("Hold kind must be Hold or Reserve."))
+	# serialize all hold mutations for this unit on the unit row lock
+	cur_status = frappe.db.get_value("Realty Unit", unit_id, "status", for_update=True)
+	if cur_status is None:
+		frappe.throw(_("Unit {0} not found.").format(unit_id))
+	if cur_status == "Sold":
+		frappe.throw(_("Unit {0} is sold.").format(unit_id))
+	# resolve lead (accept lead_id or docname) vs outside contact
+	lead = lead or None
+	if lead and not frappe.db.exists("Realty Lead", lead):
+		lead = frappe.db.get_value("Realty Lead", {"lead_id": lead}, "name") or None
+	lead_name = frappe.db.get_value("Realty Lead", lead, "lead_name") if lead else None
+	contact_name = (contact_name or "").strip() or None
+	if not lead and not contact_name:
+		frappe.throw(_("Pick a lead or enter an outside contact name."))
+	# resolve requester (manager may file on behalf of a rep)
+	rb = requested_by or _actor_owner()
+	if rb and not frappe.db.exists("Realty Sales Owner", rb):
+		rb = frappe.db.get_value("Realty Sales Owner", {"owner_id": rb}, "full_name") or rb
+	# one pending request per unit (kind-agnostic) — a hand-over supersedes nothing
+	# until approved, so block a second concurrent request.
+	pending = [h for h in _active_holds(unit_id) if h.status == "Requested"]
+	if pending:
+		frappe.throw(_("A request is already pending for this unit (by {0}). Contact them or ask a manager to act.").format(pending[0].requested_by or "a colleague"))
+	doc = frappe.get_doc({
+		"doctype": "Realty Unit Hold",
+		"hold_id": _next_id("Realty Unit Hold", "hold_id", "HLD-", 4),
+		"unit": unit_id, "kind": kind, "status": "Requested",
+		"requested_by": rb, "requested_on": frappe.utils.now(),
+		"lead": lead, "lead_name": lead_name,
+		"contact_name": contact_name, "contact_phone": (contact_phone or "").strip() or None,
+		"note": note,
+	}).insert(ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "hold_id": doc.hold_id, "status": "Requested"}
+
+
+@frappe.whitelist()
+def approve_hold(hold_id):
+	"""Approve a pending request → the unit becomes Held/Reserved. Allowed for a
+	manager, or (for a hand-over) the unit's current approved holder."""
+	_guard()
+	hold = _get_hold(hold_id)
+	if hold.status != "Requested":
+		frappe.throw(_("This request is no longer pending."))
+	cur_status = frappe.db.get_value("Realty Unit", hold.unit, "status", for_update=True)
+	if cur_status == "Sold":
+		frappe.throw(_("Unit is sold."))
+	approved = [h for h in _active_holds(hold.unit) if h.status == "Approved"]
+	actor = _actor_owner()
+	holder = approved[0].requested_by if approved else None
+	if not (_is_manager() or (holder and actor == holder)):
+		frappe.throw(_("Only a manager or the current holder can approve this."), frappe.PermissionError)
+	# close any/all current Approved holds (hand-over/override + race backstop)
+	for h in approved:
+		d = frappe.get_doc("Realty Unit Hold", h.name)
+		d.status = "Overridden"; d.closed_by = actor; d.closed_on = frappe.utils.now()
+		d.close_reason = "Handed over"; d.save(ignore_permissions=True)
+	hold.status = "Approved"
+	hold.approved_by = actor
+	hold.approved_on = frappe.utils.now()
+	hold.save(ignore_permissions=True)
+	proj = frappe.db.get_value("Realty Unit", hold.unit, "project")
+	frappe.db.set_value("Realty Unit", hold.unit, "status", KIND_TO_STATUS[hold.kind])
+	_recompute_project_counts(proj)
+	frappe.db.commit()
+	return {"ok": True, "hold_id": hold.hold_id, "status": KIND_TO_STATUS[hold.kind].lower()}
+
+
+@frappe.whitelist()
+def reject_hold(hold_id, reason=None):
+	"""Reject/cancel a pending request. Manager, the requester (cancel own), or the
+	current holder (decline a hand-over)."""
+	_guard()
+	hold = _get_hold(hold_id)
+	if hold.status != "Requested":
+		frappe.throw(_("This request is no longer pending."))
+	frappe.db.get_value("Realty Unit", hold.unit, "status", for_update=True)
+	approved = [h for h in _active_holds(hold.unit) if h.status == "Approved"]
+	actor = _actor_owner()
+	holder = approved[0].requested_by if approved else None
+	if not (_is_manager() or actor == hold.requested_by or (holder and actor == holder)):
+		frappe.throw(_("You can't decline this request."), frappe.PermissionError)
+	hold.status = "Rejected"
+	hold.closed_by = actor
+	hold.closed_on = frappe.utils.now()
+	hold.close_reason = reason or ("Cancelled" if actor == hold.requested_by else "Rejected")
+	hold.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "hold_id": hold.hold_id, "status": "Rejected"}
+
+
+@frappe.whitelist()
+def release_hold(hold_id, reason=None):
+	"""Release an approved hold → unit goes Available. Allowed for the holder or a
+	manager. Any pending hand-over is auto-declined so nothing is left dangling."""
+	_guard()
+	hold = _get_hold(hold_id)
+	if hold.status != "Approved":
+		frappe.throw(_("Only an approved hold can be released."))
+	frappe.db.get_value("Realty Unit", hold.unit, "status", for_update=True)
+	actor = _actor_owner()
+	if not (_is_manager() or actor == hold.requested_by):
+		frappe.throw(_("Only the holder or a manager can release this."), frappe.PermissionError)
+	hold.status = "Released"
+	hold.closed_by = actor
+	hold.closed_on = frappe.utils.now()
+	hold.close_reason = reason or "Released"
+	hold.save(ignore_permissions=True)
+	# vacating the slot: decline any pending hand-over request (no orphans)
+	_close_active_holds(hold.unit, "Rejected", "Unit released", exclude=hold.name)
+	proj = frappe.db.get_value("Realty Unit", hold.unit, "project")
+	frappe.db.set_value("Realty Unit", hold.unit, "status", "Available")
+	_recompute_project_counts(proj)
+	frappe.db.commit()
+	return {"ok": True, "hold_id": hold.hold_id, "status": "available"}
+
+
+@frappe.whitelist()
+def get_unit_holds(unit_id):
+	"""Full hold history for a unit (audit trail), newest first."""
+	_guard()
+	rows = frappe.get_all("Realty Unit Hold", filters={"unit": unit_id},
+		fields=["hold_id", "kind", "status", "requested_by", "requested_on", "lead",
+			"lead_name", "contact_name", "contact_phone", "note", "approved_by",
+			"approved_on", "closed_by", "closed_on", "close_reason"],
+		order_by="creation desc")
+	return [{"id": r.hold_id, "kind": r.kind, "status": r.status, "requestedBy": r.requested_by,
+		"requestedOn": _s(r.requested_on), "leadName": r.lead_name, "isOutside": not bool(r.lead),
+		"contactName": r.contact_name, "contactPhone": r.contact_phone, "note": r.note,
+		"approvedBy": r.approved_by, "approvedOn": _s(r.approved_on), "closedBy": r.closed_by,
+		"closedOn": _s(r.closed_on), "closeReason": r.close_reason} for r in rows]
 
 
 def _recompute_project_counts(code):
 	from collections import Counter
-	c = Counter(frappe.get_all("Realty Unit", filters={"project": code}, pluck="status"))
+	statuses = frappe.get_all("Realty Unit", filters={"project": code}, pluck="status")
+	c = Counter(statuses)
+	# recompute total too so the stat header always reconciles (Total = the sum of states)
 	frappe.db.set_value("Realty Project", code, {
+		"total_units": len(statuses),
 		"sold": c.get("Sold", 0), "blocked": c.get("Blocked", 0),
-		"available": c.get("Available", 0)})
+		"reserved": c.get("Reserved", 0), "available": c.get("Available", 0)})
 
 
 @frappe.whitelist()
@@ -607,7 +892,20 @@ def create_project(payload):
 
 @frappe.whitelist()
 def add_units(payload):
-	"""Bulk-generate units for a project: tower x floors x units/floor."""
+	"""Bulk-generate units for a project — uniform OR granular per-floor.
+
+	Two modes in one backward-compatible function:
+	- Uniform (legacy): ``{tower, floors, unitsPerFloor, typology, carpet, price}``
+	  → ``floors × unitsPerFloor`` identical units.
+	- Granular: ``{tower, carpetDefault, priceDefault, bands:[{from, to,
+	  rows:[{typology, carpet?, price?, facing?, count}]}]}`` → a per-floor mix,
+	  where ``count`` is units of that type PER FLOOR and carpet/price/facing fall
+	  back to the band defaults. Single-floor bands (from==to) model a penthouse.
+
+	Units are numbered ``<FL2><U2>`` with the unit counter resetting each floor and
+	incrementing left-to-right across the floor's types; unit_id is
+	``<CODE>-<TOWER>-<FL2><U2>``. Existing unit_ids are skipped (idempotent).
+	"""
 	_guard()
 	if isinstance(payload, str):
 		payload = frappe.parse_json(payload)
@@ -615,29 +913,77 @@ def add_units(payload):
 	if not frappe.db.exists("Realty Project", code):
 		frappe.throw(_("Project {0} not found.").format(code))
 	tower = (payload.get("tower") or "A").strip().upper()
-	floors = frappe.utils.cint(payload.get("floors")) or 1
-	per_floor = frappe.utils.cint(payload.get("unitsPerFloor")) or 4
-	typology = payload.get("typology") or "2 BHK"
-	carpet = frappe.utils.flt(payload.get("carpet")) or 700
-	price = frappe.utils.flt(payload.get("price")) or 5000000
 	facings = ["East", "West", "North", "South"]
-	created = 0
-	for fl in range(1, floors + 1):
-		for u in range(1, per_floor + 1):
+	valid_facing = set(facings)
+
+	# Resolve everything into a per-floor plan {floor_int: [unit-template, ...]}.
+	plan = {}
+	bands = payload.get("bands")
+	if bands:
+		carpet_def = frappe.utils.flt(payload.get("carpetDefault")) or 700
+		price_def = frappe.utils.flt(payload.get("priceDefault")) or 5000000
+		for b in bands:
+			fr = frappe.utils.cint(b.get("from"))
+			to = frappe.utils.cint(b.get("to"))
+			if fr < 1 or to < 1:
+				frappe.throw(_("Floor numbers must be 1 or greater."))
+			if fr > to:
+				frappe.throw(_("'To floor' ({0}) must be greater than or equal to 'From floor' ({1}).").format(to, fr))
+			if to > 99:
+				frappe.throw(_("Floors above 99 are not supported."))
+			templates = []
+			for r in (b.get("rows") or []):
+				cnt = frappe.utils.cint(r.get("count")) or 1
+				if cnt < 1:
+					continue
+				fc = r.get("facing")
+				templates.extend([{
+					"typology": r.get("typology") or "2 BHK",
+					"carpet": frappe.utils.flt(r.get("carpet")) or carpet_def,
+					"price": frappe.utils.flt(r.get("price")) or price_def,
+					"facing": fc if fc in valid_facing else None,
+				}] * cnt)
+			if not templates:
+				continue
+			if len(templates) > 99:
+				frappe.throw(_("A floor cannot have more than 99 units (floors {0}–{1} have {2}).").format(fr, to, len(templates)))
+			for fl in range(fr, to + 1):
+				if fl in plan:
+					frappe.throw(_("Floor {0} appears in more than one band.").format(fl))
+				plan[fl] = templates
+	else:
+		floors = frappe.utils.cint(payload.get("floors")) or 1
+		per_floor = frappe.utils.cint(payload.get("unitsPerFloor")) or 4
+		if per_floor > 99:
+			frappe.throw(_("A floor cannot have more than 99 units."))
+		typ = payload.get("typology") or "2 BHK"
+		carpet = frappe.utils.flt(payload.get("carpet")) or 700
+		price = frappe.utils.flt(payload.get("price")) or 5000000
+		for fl in range(1, floors + 1):
+			plan[fl] = [{"typology": typ, "carpet": carpet, "price": price, "facing": None}
+				for _ in range(per_floor)]
+
+	created, skipped = 0, 0
+	for fl in sorted(plan):
+		u = 0
+		for tmpl in plan[fl]:
+			u += 1
 			num = f"{fl:02d}{u:02d}"
 			# project-scoped unit_id so codes never collide across projects
 			# (the seeded AN grid uses bare "A-0101"; new projects get "<CODE>-A-0101")
 			uid = f"{code}-{tower}-{num}"
 			if frappe.db.exists("Realty Unit", uid):
+				skipped += 1
 				continue
 			frappe.get_doc({
 				"doctype": "Realty Unit", "unit_id": uid, "project": code, "tower": tower,
-				"floor": fl, "unit_no": num, "typology": typology, "carpet_area": carpet,
-				"facing": facings[(u - 1) % 4], "price": price, "status": "Available",
+				"floor": fl, "unit_no": num, "typology": tmpl["typology"],
+				"carpet_area": tmpl["carpet"], "facing": tmpl["facing"] or facings[(u - 1) % 4],
+				"price": tmpl["price"], "status": "Available",
 			}).insert()
 			created += 1
 
-	# refresh denormalized project rollups + ensure a tower row exists
+	# refresh denormalized project rollups + ensure/update the tower row
 	from collections import Counter
 	statuses = frappe.get_all("Realty Unit", filters={"project": code}, pluck="status")
 	c = Counter(statuses)
@@ -645,10 +991,17 @@ def add_units(payload):
 	proj.total_units = len(statuses)
 	proj.sold = c.get("Sold", 0)
 	proj.blocked = c.get("Blocked", 0)
+	proj.reserved = c.get("Reserved", 0)
 	proj.available = c.get("Available", 0)
 	proj.towers_count = len(set(frappe.get_all("Realty Unit", filters={"project": code}, pluck="tower")))
-	if not any((t.tower_code or "").upper() == tower for t in proj.towers):
-		proj.append("towers", {"tower_code": tower, "tower_name": f"Tower {tower}", "floors": floors})
+	# the tower's true top floor (across existing + newly added units; handles gappy towers)
+	top_floor = frappe.db.sql(
+		"select max(floor) from `tabRealty Unit` where project=%s and tower=%s", (code, tower))[0][0] or 1
+	row = next((t for t in proj.towers if (t.tower_code or "").upper() == tower), None)
+	if row:
+		row.floors = max(frappe.utils.cint(row.floors), frappe.utils.cint(top_floor))
+	else:
+		proj.append("towers", {"tower_code": tower, "tower_name": f"Tower {tower}", "floors": top_floor})
 	proj.save()
 	frappe.db.commit()
-	return {"ok": True, "created": created}
+	return {"ok": True, "created": created, "skipped": skipped}

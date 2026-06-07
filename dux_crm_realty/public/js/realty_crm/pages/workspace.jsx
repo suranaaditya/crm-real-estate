@@ -13,7 +13,7 @@ window.Workspace = function Workspace({ density = "comfortable", defaultView = "
     dashboard: { title: "Dashboard",      subtitle: "GOOD MORNING, PRIYA" },
     calendar:  { title: "My Day",         subtitle: "TASKS & VISITS · MY CALENDAR" },
     leads:     { title: "Leads",          subtitle: "SALES PIPELINE" },
-    visits:    { title: "Site Visits",    subtitle: "CALENDAR · WEEK & DAY" },
+    visits:    { title: "Site Visits",    subtitle: "ALL VISITS · TEAM CALENDAR" },
     inventory: { title: "Inventory",      subtitle: "TOWERS · FLOORS · UNITS" },
     bookings:  { title: "Bookings",       subtitle: "AGREEMENTS · COST SHEETS" },
     payments:  { title: "Payments",       subtitle: "COLLECTIONS & SCHEDULE" },
@@ -37,8 +37,8 @@ window.Workspace = function Workspace({ density = "comfortable", defaultView = "
           {activePage === "dashboard" && <Btn variant="accent" icon="plus" size="sm" onClick={() => window.__openNewLead && window.__openNewLead()}>New Lead</Btn>}
         </Topbar>
         {activePage === "dashboard" && <PageDashboard onNav={onNav} />}
-        {activePage === "calendar"  && <PageCalendar />}
-        {activePage === "visits"    && <PageVisits />}
+        {activePage === "calendar"  && <PageCalendar key="my-day" />}
+        {activePage === "visits"    && <PageCalendar key="visits" initialKind="visits" teamView />}
         {activePage === "inventory" && <PageInventory />}
         {activePage === "bookings"  && <PageBookings />}
         {activePage === "payments"  && <PagePayments />}

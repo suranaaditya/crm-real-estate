@@ -10,7 +10,9 @@
   "full_name",
   "owner_id",
   "role",
-  "initials"
+  "initials",
+  "user",
+  "phone"
  ],
  "fields": [
   {
@@ -38,6 +40,17 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Initials"
+  },
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "label": "User",
+   "options": "User"
+  },
+  {
+   "fieldname": "phone",
+   "fieldtype": "Data",
+   "label": "Phone"
   }
  ],
  "grid_page_length": 50,

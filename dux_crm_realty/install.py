@@ -154,6 +154,9 @@ def create_doctypes():
 		f("owner_id", "Data", "Owner ID", in_list_view=1),
 		f("role", "Data", "Role", in_list_view=1),
 		f("initials", "Data", "Initials", in_list_view=1),
+		# session->rep mapping for hold attribution (blank until reps get Frappe logins)
+		f("user", "Link", "User", options="User"),
+		f("phone", "Data", "Phone"),
 	])
 
 	# child table that links a master (Sales Owner) — created after it exists
@@ -207,6 +210,7 @@ def create_doctypes():
 		f("total_units", "Int", "Total Units"),
 		f("sold", "Int", "Sold"),
 		f("blocked", "Int", "Blocked"),
+		f("reserved", "Int", "Reserved"),
 		f("available", "Int", "Available"),
 		f("price_from", "Currency", "Price From"),
 		f("price_to", "Currency", "Price To"),
@@ -229,7 +233,7 @@ def create_doctypes():
 		f("carpet_area", "Float", "Carpet Area (sqft)"),
 		f("facing", "Select", "Facing", options="East\nWest\nNorth\nSouth"),
 		f("price", "Currency", "Price", in_list_view=1),
-		f("status", "Select", "Status", options="Available\nBlocked\nSold", in_list_view=1, default="Available"),
+		f("status", "Select", "Status", options="Available\nBlocked\nReserved\nSold", in_list_view=1, default="Available"),
 	])
 
 	# ---- lead ----
@@ -370,6 +374,33 @@ def create_doctypes():
 		f("lead", "Link", "Lead", options="Realty Lead"),
 		f("lead_name", "Data", "Lead Name", fetch_from="lead.lead_name", read_only=1),
 		f("notes", "Small Text", "Notes"),
+	])
+
+	# ---- unit hold / reserve ledger (audit log; one record per request) ----
+	make_doctype("Realty Unit Hold", autoname="field:hold_id", title_field="hold_id",
+		search_fields="unit,requested_by,lead_name", fields=[
+		f("hold_id", "Data", "Hold ID", reqd=1, unique=1, in_list_view=1),
+		f("unit", "Link", "Unit", options="Realty Unit", reqd=1, in_list_view=1),
+		f("kind", "Select", "Kind", options="Hold\nReserve", default="Hold", in_list_view=1),
+		f("status", "Select", "Status", options="Requested\nApproved\nRejected\nReleased\nOverridden",
+			default="Requested", in_list_view=1),
+		f("col_break_hold", "Column Break"),
+		f("requested_by", "Link", "Requested By", options="Realty Sales Owner", in_list_view=1),
+		f("requested_on", "Datetime", "Requested On"),
+		f("approved_by", "Data", "Approved By"),
+		f("approved_on", "Datetime", "Approved On"),
+		f("sec_break_hold_lead", "Section Break", "Lead / Contact"),
+		# lead set => CRM lead; else outside enquiry (contact_*). lead_name is frozen at
+		# request time (NOT fetch_from) so the audit row stays historical.
+		f("lead", "Link", "Lead", options="Realty Lead"),
+		f("lead_name", "Data", "Lead Name"),
+		f("contact_name", "Data", "Outside Contact Name"),
+		f("contact_phone", "Data", "Outside Contact Phone"),
+		f("note", "Small Text", "Note"),
+		f("sec_break_hold_close", "Section Break", "Closure"),
+		f("closed_by", "Data", "Closed By"),
+		f("closed_on", "Datetime", "Closed On"),
+		f("close_reason", "Data", "Close Reason"),
 	])
 
 

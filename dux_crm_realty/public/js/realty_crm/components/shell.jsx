@@ -249,16 +249,17 @@ window.Topbar = function Topbar({ title, subtitle, children, accent, search, onS
       }}>
         <Icon name="search" size={16} style={{ color: "var(--neutral-400)" }} />
         <input placeholder={searchPlaceholder || "Search leads, projects, units…"}
+          data-crm-search={onSearch ? "1" : undefined}
           value={onSearch ? (search || "") : undefined}
           onChange={onSearch ? (e) => onSearch(e.target.value) : undefined}
           style={{ background: "transparent", border: 0, outline: "none", flex: 1, fontFamily: "var(--font-body)", fontSize: 14 }} />
         {onSearch && search ? (
           <button onClick={() => onSearch("")} title="Clear" style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--neutral-400)", display: "inline-flex" }}><Icon name="x" size={14} /></button>
         ) : (
-        <kbd style={{
+        <kbd title="Press / to search" style={{
           fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--neutral-400)",
-          padding: "2px 6px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--hairline)"
-        }}>⌘K</kbd>
+          padding: "2px 7px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--hairline)"
+        }}>/</kbd>
         )}
       </div>
       <button title="Notifications" style={iconBtn}><Icon name="bell" size={18} /><span style={notifDot} /></button>
@@ -350,5 +351,22 @@ window.FilterChip = function FilterChip({ active, children, onClick, count }) {
         }}>{count}</span>
       )}
     </button>
+  );
+};
+
+// ---------- Segmented control (Week/Day toggles, etc.) ----------
+window.SegmentedControl = function SegmentedControl({ value, onChange, options }) {
+  return (
+    <div style={{ display: "inline-flex", padding: 3, background: "var(--neutral-100)", borderRadius: 8, gap: 2 }}>
+      {options.map(o => (
+        <button key={o.value} onClick={() => onChange(o.value)} style={{
+          padding: "6px 14px", border: "none",
+          background: value === o.value ? "var(--bg)" : "transparent",
+          color: value === o.value ? "var(--neutral-800)" : "var(--neutral-600)",
+          fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: "pointer",
+          boxShadow: value === o.value ? "var(--shadow-xs)" : "none",
+        }}>{o.label}</button>
+      ))}
+    </div>
   );
 };

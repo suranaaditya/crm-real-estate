@@ -1,11 +1,16 @@
 import React from "react";
-/* My Calendar — one person's agenda: tasks + site visits, week/day.
-   Owner selector lets a manager view anyone's calendar; tasks assigned to a
-   person (by themselves or a manager) show on that person's calendar. */
+/* My Calendar — the single calendar surface for tasks + site visits, week/day.
+   Owner selector views anyone's agenda (or "Everyone (team)") and a project
+   filter narrows to one project; the kind chips (All / Tasks / Visits) switch
+   the lens. The "Site Visits" nav entry mounts this with teamView + the Visits
+   lens, so there is no separate visits calendar. Clicking a visit (or a
+   lead-linked item) opens the lead drawer. */
 
 const CAL_ICON = { "Follow-up call": "phone", "WhatsApp": "whatsapp", "Email": "mail", "Site visit": "calendar", "Send documents": "file", "Collect documents": "file", "Payment follow-up": "rupee", "Meeting": "users", "Other": "note" };
 
-window.PageCalendar = function PageCalendar() {
+const EVERYONE = "__all__";   // owner-selector sentinel: show the whole team's agenda
+
+window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = false }) {
   const data = window.CRM_DATA;
   const TODAY = data.today || "2026-04-29";
   const pad = (n) => String(n).padStart(2, "0");
@@ -13,12 +18,15 @@ window.PageCalendar = function PageCalendar() {
   const mondayOf = (iso) => { const d = new Date(iso + "T00:00:00"); const dow = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dow); return d; };
 
   const me = (data.currentUser && data.currentUser.name) || (data.owners[0] && data.owners[0].name) || "";
-  const [owner, setOwner] = React.useState(me);
-  const [kind, setKind] = React.useState("all");      // all | tasks | visits
+  const [owner, setOwner] = React.useState(teamView ? EVERYONE : me);
+  const [kind, setKind] = React.useState(initialKind);   // all | tasks | visits
+  const [projectF, setProjectF] = React.useState("all"); // all | P-<code>
   const [view, setView] = React.useState("week");
   const [weekStart, setWeekStart] = React.useState(() => mondayOf(TODAY));
   const [selectedDate, setSelectedDate] = React.useState(TODAY);
   const [taskOpen, setTaskOpen] = React.useState(false);
+  const [openLead, setOpenLead] = React.useState(null);   // lead drawer (opened from a visit/linked task)
+  const findLead = (id) => (data.leads || []).find(l => l.id === id);
 
   const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -35,18 +43,22 @@ window.PageCalendar = function PageCalendar() {
 
   const items = React.useMemo(() => {
     const out = [];
-    if (kind !== "visits") (data.tasks || []).filter(t => t.assignedTo === owner).forEach(t => out.push({
+    const mineT = (t) => owner === EVERYONE || t.assignedTo === owner;
+    const mineV = (v) => owner === EVERYONE || v.ownerName === owner;
+    const inProj = (p) => projectF === "all" || p === projectF;
+    if (kind !== "visits") (data.tasks || []).filter(t => mineT(t) && inProj(t.project)).forEach(t => out.push({
       id: t.id, date: t.dueDate, time: (t.dueTime || "09:00").slice(0, 5), kind: "task",
       title: t.title, type: t.type, sub: t.type + (t.leadName ? " · " + t.leadName : ""),
-      priority: t.priority, done: t.done, raw: t,
+      priority: t.priority, done: t.done, leadId: t.leadId, raw: t,
     }));
-    if (kind !== "tasks") (data.visits || []).filter(v => v.ownerName === owner).forEach(v => out.push({
+    if (kind !== "tasks") (data.visits || []).filter(v => mineV(v) && inProj(v.project)).forEach(v => out.push({
       id: v.id, date: v.date, time: (v.time || "11:00").slice(0, 5), kind: "visit",
-      title: v.leadName, type: "Site visit", sub: "Site visit · " + (v.projectName || "") + " · party of " + v.partyOf,
-      status: v.status, raw: v,
+      title: v.leadName, type: "Site visit",
+      sub: (v.projectName || "Site visit") + " · party of " + v.partyOf + (v.status ? " · " + v.status : ""),
+      status: v.status, leadId: v.leadId, raw: v,
     }));
     return out;
-  }, [owner, kind, data]);
+  }, [owner, kind, projectF, data]);
 
   const toneFor = (it) => {
     if (it.kind === "visit") return { bg: "var(--dux-amber-100)", fg: "var(--dux-amber-600)" };
@@ -64,11 +76,17 @@ window.PageCalendar = function PageCalendar() {
   const todayCount = items.filter(it => it.date === TODAY).length;
   const visitsCount = items.filter(it => it.kind === "visit").length;
 
+  const onItemClick = (it) => {
+    if (it.kind === "task") return toggleTask(it.id);
+    if (it.kind === "visit" && it.leadId) { const l = findLead(it.leadId); if (l) setOpenLead(l); }
+  };
+
   const ItemCard = ({ it, compact }) => {
     const tone = toneFor(it);
+    const clickable = it.kind === "task" || (it.kind === "visit" && it.leadId);
     return (
-      <div onClick={() => { if (it.kind === "task") toggleTask(it.id); }} title={it.kind === "task" ? "Click to mark done/undone" : ""}
-        style={{ background: tone.bg, borderLeft: `3px solid ${tone.fg}`, borderRadius: compact ? 4 : 8, padding: compact ? "4px 6px" : "10px 12px", cursor: it.kind === "task" ? "pointer" : "default", marginBottom: compact ? 2 : 0, opacity: it.done ? 0.55 : 1 }}>
+      <div onClick={() => onItemClick(it)} title={it.kind === "task" ? "Click to mark done/undone" : (it.leadId ? "Open lead" : "")}
+        style={{ background: tone.bg, borderLeft: `3px solid ${tone.fg}`, borderRadius: compact ? 4 : 8, padding: compact ? "4px 6px" : "10px 12px", cursor: clickable ? "pointer" : "default", marginBottom: compact ? 2 : 0, opacity: it.done ? 0.55 : 1 }}>
         <div style={{ display: "flex", alignItems: "center", gap: compact ? 4 : 8 }}>
           {!compact && <Icon name={CAL_ICON[it.type] || "note"} size={14} style={{ color: tone.fg }} />}
           <span style={{ fontFamily: "var(--font-mono)", fontSize: compact ? 9 : 11, color: tone.fg, fontWeight: 700 }}>{it.time}</span>
@@ -81,7 +99,7 @@ window.PageCalendar = function PageCalendar() {
   };
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
       <div style={{ padding: "16px 24px", display: "flex", alignItems: "center", gap: 14, borderBottom: "1px solid var(--hairline)", background: "var(--bg)", flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Btn variant="ghost" size="sm" onClick={() => shiftWeek(-1)}>‹</Btn>
@@ -92,7 +110,12 @@ window.PageCalendar = function PageCalendar() {
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11, fontWeight: 700, color: "var(--neutral-400)", fontFamily: "var(--font-display)", letterSpacing: "0.06em", textTransform: "uppercase" }}>Calendar of</span>
         <select value={owner} onChange={(e) => setOwner(e.target.value)} style={{ padding: "8px 12px", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 13, fontFamily: "var(--font-body)" }}>
+          <option value={EVERYONE}>Everyone (team)</option>
           {(data.owners || []).map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+        </select>
+        <select value={projectF} onChange={(e) => setProjectF(e.target.value)} title="Filter by project" style={{ padding: "8px 12px", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 13, fontFamily: "var(--font-body)" }}>
+          <option value="all">All projects</option>
+          {(data.projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
         <SegmentedControl value={view} onChange={setView} options={[{ value: "week", label: "Week" }, { value: "day", label: "Day" }]} />
         <Btn variant="accent" size="sm" icon="plus" onClick={() => setTaskOpen(true)}>New task</Btn>
@@ -105,7 +128,7 @@ window.PageCalendar = function PageCalendar() {
         <FilterChip active={kind === "visits"} onClick={() => setKind("visits")}>Visits</FilterChip>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: "var(--neutral-500)" }}>
-          {owner === me ? "Your" : owner + "’s"} agenda · <strong style={{ color: "var(--neutral-800)" }}>{openTasks.length}</strong> open tasks
+          {owner === EVERYONE ? "Team" : owner === me ? "Your" : owner + "’s"} agenda · <strong style={{ color: "var(--neutral-800)" }}>{openTasks.length}</strong> open tasks
           {overdue.length > 0 && <> · <strong style={{ color: "var(--error)" }}>{overdue.length} overdue</strong></>}
         </span>
       </div>
@@ -169,8 +192,10 @@ window.PageCalendar = function PageCalendar() {
         )}
       </div>
 
-      <TaskModal open={taskOpen} onClose={() => setTaskOpen(false)} defaultOwner={owner}
+      <TaskModal open={taskOpen} onClose={() => setTaskOpen(false)}
+        defaultOwner={owner === EVERYONE ? me : owner}
         defaultDate={selectedDate} onSaved={refresh} />
+      {openLead && <LeadDetail key={openLead.id} lead={openLead} onClose={() => setOpenLead(null)} />}
     </div>
   );
 };

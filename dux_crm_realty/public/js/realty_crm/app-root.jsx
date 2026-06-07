@@ -84,6 +84,26 @@ window.RealtyApp = function RealtyApp() {
     document.documentElement.style.setProperty("--dux-amber", tweaks.accent);
   }, [tweaks.accent]);
 
+  // "/" focuses the CRM search. ⌘K is reserved by Frappe's desk (global search),
+  // so we use "/" and intercept it in the capture phase — beating Frappe's own
+  // keydown handler — while leaving it untouched whenever the user is typing.
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const ae = document.activeElement;
+      const tag = ae && ae.tagName;
+      if (ae && (ae.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT")) return;
+      const box = document.querySelector('input[data-crm-search="1"]');
+      if (!box) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      box.focus();
+      if (box.select) box.select();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+
   // exposed so deep buttons (New Lead) + write actions can reach the root
   window.__openNewLead = () => setNewLeadOpen(true);
   window.__refreshCRM = async () => {

@@ -75,13 +75,17 @@ dux_crm_realty/                         # python package (app)
   public/js/realty_crm/                 # the React app (esbuild bundle)
     realty_crm.bundle.jsx               # entry: imports react, mounts, registers frappe.ui.RealtyCRM
     app-root.jsx                        # RealtyApp: router state, New-Lead modal, __refreshCRM
-    components/shell.jsx                # Icon set, Avatar, StageBadge, ScoreChip, Sidebar, Topbar, Btn…
+    components/shell.jsx                # Icon set, Avatar, StageBadge, ScoreChip, Sidebar, Topbar,
+                                        #   Btn, FilterChip, SegmentedControl, StatCard…
     components/forms.jsx                # Modal, Field/Input/Select, NewLeadModal, CreateProjectModal,
-                                        #   AddUnitsModal, TaskModal
+                                        #   AddUnitsModal, TaskModal (optional lead picker — project
+                                        #   filter + search — shown when no lead is preset)
     components/lead-detail.jsx          # the lead drawer (tabs, schedule-visit modal, tasks)
     pages/direction-a.jsx               # Leads (table↔kanban, search, filters, KPIs, bulk, export)
-    pages/page-calendar.jsx             # "My Day" — tasks + visits calendar (owner selector)
-    pages/page-visits.jsx, page-inventory.jsx, page-bookings.jsx, page-payments.jsx,
+    pages/page-calendar.jsx             # THE calendar — "My Day" tasks + visits; owner/team scope +
+                                        #   project filter; "Site Visits" nav reuses it (teamView,
+                                        #   Visits lens). Click a visit/linked item → opens lead drawer.
+    pages/page-inventory.jsx, page-bookings.jsx, page-payments.jsx,
     pages/page-partners.jsx, page-reports.jsx, page-settings.jsx, campaigns.jsx, workspace.jsx
 design-reference/                       # the original Claude-Design prototype (pixel source of truth)
 ```
@@ -97,19 +101,41 @@ loads the CSS as a plain asset, then `frappe.require("realty_crm.bundle.jsx")` a
 
 ## Data model (DocTypes, all `Realty `-prefixed)
 
-Realty **Project** (+ child Realty Tower), **Unit**, **Lead** (+ child Activity / Cost Sheet Item),
+Realty **Project** (+ child Realty Tower; rollup fields total_units/sold/blocked/**reserved**/available),
+**Unit** (status **Available / Blocked / Reserved / Sold**), **Lead** (+ child Activity / Cost Sheet Item),
 **Site Visit**, **Booking**, **Payment Due**, **Channel Partner**, **Campaign**, **Task** (standalone,
 drives the calendar), and masters **Lead Stage / Lead Source / Sales Owner / Message Template /
 Payment Plan**. Shapes map 1:1 to the prototype's `app/data.js`. Roles: `Realty Sales Executive /
-Sales Manager / Finance / Admin`.
+Sales Manager / Finance / Admin`. **Schema changes go via editing the doctype JSON + `bench migrate`**
+(mirror in `install.py` for fresh installs — `create_doctypes` is create-only and SKIPS existing
+doctypes, so it won't apply field/option changes to a live site).
 
 ## Key API (all in `api/crm.py`, whitelisted)
 
 - `get_bootstrap()` → the entire dataset in `window.CRM_DATA` shape (projects, leads, visits,
-  bookings, paymentDues, campaigns, grids, tasks, stages, owners, currentUser, today …).
+  bookings, paymentDues, campaigns, grids, tasks, stages, owners, currentUser, today …). Tasks
+  carry `leadId` + `project` (P-<code>) so the calendar can filter tasks by project and open the
+  linked lead; visits carry `leadId` likewise.
 - Writes: `create_lead`, `log_activity`, `update_lead_stage`, `reassign_lead`, `bulk_reassign`,
-  `schedule_visit`, `block_unit`, `advance_booking`, `record_receipt`, `send_reminder`,
-  `process_payout`, `create_project`, `add_units`, `create_task`, `set_task_status`.
+  `schedule_visit`, `set_unit_status`, `block_unit`, `advance_booking`, `record_receipt`,
+  `send_reminder`, `process_payout`, `create_project`, `add_units`, `create_task`, `set_task_status`.
+- **`set_unit_status(unit_id, status)`** drives the inventory lifecycle (Available↔Blocked↔Reserved→Sold);
+  validates the transition, gates a Sold→Available unwind to managers, recomputes project rollups.
+  `block_unit` is now a back-compat shim that toggles Available↔Blocked via it.
+- **`add_units(payload)`** is uniform OR granular. Uniform (legacy): `{tower, floors, unitsPerFloor,
+  typology, carpet, price}`. Granular per-floor: `{tower, carpetDefault, priceDefault, bands:[{from, to,
+  rows:[{typology, carpet?, price?, facing?, count}]}]}` — `count` is per-floor; single-floor band =
+  penthouse. Numbered `<FL2><U2>`, idempotent (existing unit_ids skipped → `skipped` in the result).
+- `_recompute_project_counts(code)` is authoritative for **total_units** too (so the inventory header
+  reconciles Total = Available+Blocked+Reserved+Sold; seeded-but-unbuilt projects correctly read 0).
+- **Unit hold/reserve workflow** (`Realty Unit Hold` doctype = per-unit audit log): `request_hold`
+  (team member asks — for a `lead` OR outside `contact_name`/`contact_phone`; always pending, never
+  auto-approves), `approve_hold` (manager, or the current holder for a hand-over), `reject_hold`
+  (manager / requester-cancel / holder-decline), `release_hold` (holder or manager; auto-declines any
+  pending hand-over), `get_unit_holds` (history). Each endpoint takes a `for_update` row lock on the
+  unit (serialization point) — at most one Approved + one Requested hold per unit. `get_bootstrap`
+  attaches active holds to each grid unit (`unit.holds`) + a top-level `pendingHolds`, and exposes
+  `currentUser.isManager`; owners carry `phone`.
 
 ---
 
@@ -131,6 +157,22 @@ Sales Manager / Finance / Admin`.
 - **`bench browse` resolves the wrong host** on this box → use the API token above for HTTP tests.
 - After a write, the UI calls `window.__refreshCRM()` (refetch `get_bootstrap`, re-render). The lead
   drawer keeps local state for the bits it mutates so it stays correct across refreshes.
+- **Frappe's own 50px desk sidebar (`.body-sidebar-container`) is hidden only on this page**: the page
+  loader (`page/realty_crm/realty_crm.js`) toggles a `body.realty-crm-active` class via `on_page_show`/
+  `on_page_hide` + a `frappe.router.on('change')` guard; `realty_crm.css` hides the sidebar under that
+  class. It's per-tab DOM only — restored on every other route (don't break this on the shared box).
+- **Inventory unit panel is click-to-select** (not hover — hover left the panel unreachable). Clicking a
+  unit opens a persistent bottom-right panel (Esc / × / click-another to close) with contextual
+  lifecycle buttons (`set_unit_status` for Mark-sold/legacy-release; the hold endpoints for
+  request/approve/release); the panel re-resolves the unit from the live grid each render so it never
+  shows a stale object after a refresh.
+- **Hold attribution identity is a known, documented limitation.** Actor identity comes from
+  `_actor_owner()` (maps `frappe.session.user` → the `Realty Sales Owner.user` link, else falls back to
+  the pinned persona). With ONE shared login (and reps not yet having Frappe Users) every actor
+  collapses to that persona, so ownership gates (holder-can-release/approve, requester-can-cancel)
+  effectively pass for the single user, and `requested_by` is client-asserted/informational.
+  **Approvals still gate on real Frappe roles** (`_is_manager()` via `MANAGER_ROLES`). Real per-rep
+  enforcement just needs each rep mapped to a Frappe User via that `user` link — no code change.
 
 ## Verifying
 
@@ -142,8 +184,21 @@ Sales Manager / Finance / Admin`.
 ## Current state (done) & ideas for next
 
 **Done:** all modules render live; full CRUD/actions wired; Project+Inventory creation; lead
-assignment model; status changes; **Tasks + "My Day" calendar** (manager can view anyone's agenda);
-Leads page fully functional. Verified live in-browser.
+assignment model; status changes; **Tasks + "My Day" calendar** (manager can view anyone's agenda
+or "Everyone (team)", filter by project; the My-Day TaskModal can link a lead — project filter +
+search — and linked tasks then show on the lead's Tasks tab); **Site Visits is now the same
+calendar** (teamView + Visits lens — the standalone visits grid was retired, `page-visits.jsx`
+deleted, `SegmentedControl` moved to `shell.jsx`); clicking a visit/linked item opens the lead
+drawer. **Search shortcut is `/`** (capture-phase handler in `app-root.jsx`; ⌘K stays with Frappe's
+global search). **Inventory finalized**: click-to-select unit panel with a full lifecycle
+(Block/Hold · Reserve · Release · Mark sold / Confirm sold / Re-block / Release-sale) via
+`set_unit_status` + the new `Reserved` status; stat header reconciles (Total/Available/Blocked/
+Reserved/Sold); **granular per-floor Add-units** (floor bands with per-type rows — handles mixed
+floors + a single penthouse on top); **Frappe desk sidebar hidden** on the CRM page (restored
+elsewhere). **Unit hold/reserve approval workflow**: request (lead OR outside enquiry) → manager
+approves; holder can release / approve a hand-over; manager can override; per-unit audit log
+(`Realty Unit Hold`); panel shows holder + LEAD/OUTSIDE pill + contact; concurrency-safe via row
+locks (identity caveat above). Leads page fully functional. Verified live in-browser.
 
 **Not yet / out of scope (production-build items):** real SMS/WhatsApp/email & payment gateways
 (`send_reminder` just logs a Communication), cost-sheet/agreement PDF generation, RERA hooks, native

@@ -86,7 +86,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Available\nBlocked\nSold"
+   "options": "Available\nBlocked\nReserved\nSold"
   }
  ],
  "grid_page_length": 50,

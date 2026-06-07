@@ -19,6 +19,7 @@
   "total_units",
   "sold",
   "blocked",
+  "reserved",
   "available",
   "price_from",
   "price_to",
@@ -94,6 +95,11 @@
    "fieldname": "blocked",
    "fieldtype": "Int",
    "label": "Blocked"
+  },
+  {
+   "fieldname": "reserved",
+   "fieldtype": "Int",
+   "label": "Reserved"
   },
   {
    "fieldname": "available",

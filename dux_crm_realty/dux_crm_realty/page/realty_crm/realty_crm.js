@@ -1,6 +1,21 @@
 /* Desk page that hosts the Shradha CRM React app. Immersive full-bleed surface
    (page-head hidden) below the desk navbar — mirrors dux_chatbot's pattern.
    The heavy React bundle is loaded lazily via frappe.require (like Raven). */
+
+/* The CRM ships its own navy sidebar, so we hide Frappe's 50px desk sidebar
+   while THIS page is the active route and restore it everywhere else. The hide
+   is a body class consumed by realty_crm.css; this is per-tab DOM only (no server
+   / cross-user state), and the router guard guarantees it never leaks to other
+   desk pages on this shared box. */
+const REALTY_BODY_CLASS = "realty-crm-active";
+function _realtyHideDeskSidebar() { document.body.classList.add(REALTY_BODY_CLASS); }
+function _realtyRestoreDeskSidebar() { document.body.classList.remove(REALTY_BODY_CLASS); }
+function _realtySyncDeskSidebar() {
+	const route = (frappe.get_route && frappe.get_route()) || [];
+	if (route && route[0] === "realty-crm") _realtyHideDeskSidebar();
+	else _realtyRestoreDeskSidebar();
+}
+
 frappe.pages["realty-crm"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
@@ -18,6 +33,12 @@ frappe.pages["realty-crm"].on_page_load = function (wrapper) {
 	});
 	$wrapper.find(".page-body").css({ "margin-top": 0, padding: 0 }).empty().append(mount);
 
+	// Hide the desk sidebar now (first construction) and keep it in sync with the
+	// route. Bind the router guard exactly ONCE (on_page_load runs once) so it can
+	// never stack duplicate listeners; it is idempotent (only toggles a class).
+	_realtyHideDeskSidebar();
+	frappe.router.on("change", _realtySyncDeskSidebar);
+
 	// Load the design tokens / base CSS as a plain static asset first (Frappe's
 	// frappe.require does not inject the CSS esbuild extracts from the JS bundle),
 	// then load the React bundle and mount.
@@ -27,3 +48,7 @@ frappe.pages["realty-crm"].on_page_load = function (wrapper) {
 		});
 	});
 };
+
+// Fire on every entry/exit of this desk page (incl. back/forward + app switches).
+frappe.pages["realty-crm"].on_page_show = _realtyHideDeskSidebar;
+frappe.pages["realty-crm"].on_page_hide = _realtyRestoreDeskSidebar;
