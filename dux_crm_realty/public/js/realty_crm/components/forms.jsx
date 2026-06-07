@@ -907,7 +907,13 @@ window.UploadDocumentModal = function UploadDocumentModal({ open, onClose, onSav
         <Btn variant="accent" size="sm" icon="upload" onClick={save}>{busy ? "Uploading…" : "Upload"}</Btn>
       </>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Field label="File" required span={2}>
+        {/* NOT wrapped in <Field> — Field renders a <label>, and a <label> containing a file
+            input natively forwards clicks to it; combined with the explicit .click() that double-
+            fires the OS picker (opens, then reopens without attaching). Use a plain block instead. */}
+        <div style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontFamily: "var(--font-display)", fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--neutral-600)" }}>
+            File<span style={{ color: "var(--dux-amber-600)" }}> *</span>
+          </span>
           <div onClick={() => fileRef.current && fileRef.current.click()}
             style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", cursor: "pointer",
               border: "1px dashed " + (file ? "var(--dux-amber)" : "var(--hairline)"), borderRadius: 10,
@@ -922,7 +928,7 @@ window.UploadDocumentModal = function UploadDocumentModal({ open, onClose, onSav
           </div>
           <input ref={fileRef} type="file" style={{ display: "none" }}
             onChange={(e) => { const fl = e.target.files && e.target.files[0]; if (fl) { setFile(fl); if (!form.title) u("title", fl.name.replace(/\.[^.]+$/, "")); } }} />
-        </Field>
+        </div>
         <Field label="Title" span={2}><Input placeholder="e.g. Tower B cost sheet v3" value={form.title} onChange={(e) => u("title", e.target.value)} /></Field>
         <Field label="Category">
           <Select value={form.category} onChange={(e) => u("category", e.target.value)}>{cats.map(c => <option key={c}>{c}</option>)}</Select>
