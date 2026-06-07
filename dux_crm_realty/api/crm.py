@@ -104,7 +104,7 @@ def get_bootstrap():
 
 	# ---- masters / lookups ----
 	owners = frappe.get_all("Realty Sales Owner",
-		fields=["full_name", "owner_id", "role", "initials", "phone"], order_by="owner_id")
+		fields=["full_name", "owner_id", "role", "initials", "phone", "user"], order_by="owner_id")
 	owner_by_name = {o.full_name: o for o in owners}
 
 	projects_raw = frappe.get_all("Realty Project", fields=[
@@ -326,7 +326,7 @@ def get_bootstrap():
 		"activity": focused["activities"] if focused else [],
 		"projects": projects, "sources": sources, "stages": stages, "owners": [
 			{"id": o.owner_id, "name": o.full_name, "role": o.role, "initials": o.initials,
-			 "phone": o.phone}
+			 "phone": o.phone, "login": o.user}
 			for o in owners],
 		"channelPartners": channel_partners, "leads": leads, "documents": DOCUMENTS,
 		"inventory": {"P-AN": {"towers": an_towers, "units": floor7b}},
@@ -744,6 +744,123 @@ def release_hold(hold_id, reason=None):
 	_recompute_project_counts(proj)
 	frappe.db.commit()
 	return {"ok": True, "hold_id": hold.hold_id, "status": "available"}
+
+
+# --------------------------------------------------------------------------- #
+# admin / settings (manager-gated)
+# --------------------------------------------------------------------------- #
+# Roles a manager may assign to a new login — never System Manager (no escalation).
+SAFE_REALTY_ROLES = ("Realty Sales Executive", "Realty Sales Manager", "Realty Finance", "Realty Admin")
+
+
+@frappe.whitelist()
+def create_rep(payload):
+	"""Add a sales team member (Realty Sales Owner) and, optionally, a Frappe login
+	(User) linked to it — which makes hold/lead attribution real for that rep.
+	Manager-gated; the login may only get a Realty role (no privilege escalation)."""
+	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can add team members."), frappe.PermissionError)
+	if isinstance(payload, str):
+		payload = frappe.parse_json(payload)
+	full_name = (payload.get("full_name") or "").strip()
+	if not full_name:
+		frappe.throw(_("Name is required."))
+	if frappe.db.exists("Realty Sales Owner", full_name):
+		frappe.throw(_("A team member named {0} already exists.").format(full_name))
+	role_text = (payload.get("role") or "Sales Executive").strip()
+	initials = ("".join(w[0] for w in full_name.split()[:2])).upper() or "?"
+	owner_id = _next_id("Realty Sales Owner", "owner_id", "U", 0)
+	email = (payload.get("email") or "").strip().lower() or None
+	want_login = bool(payload.get("createLogin")) and bool(email)
+	user_link = None
+	if want_login:
+		frole = payload.get("frappeRole") or "Realty Sales Executive"
+		if frole not in SAFE_REALTY_ROLES:
+			frole = "Realty Sales Executive"
+		if frappe.db.exists("User", email):
+			user_link = email  # link an existing login
+		else:
+			u = frappe.get_doc({
+				"doctype": "User", "email": email, "first_name": full_name,
+				"enabled": 1, "send_welcome_email": 0,
+				"roles": [{"role": frole}],
+			})
+			u.insert(ignore_permissions=True)
+			user_link = u.name
+	frappe.get_doc({
+		"doctype": "Realty Sales Owner", "full_name": full_name, "owner_id": owner_id,
+		"role": role_text, "initials": initials,
+		"phone": (payload.get("phone") or "").strip() or None, "user": user_link,
+	}).insert(ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "name": full_name, "owner_id": owner_id, "login": user_link}
+
+
+@frappe.whitelist()
+def delete_project(code):
+	"""Delete a project and cascade its units/holds/visits — but refuse if it has
+	real transactions (sold units, bookings) or leads still pointing at it, so no
+	revenue/relationship data is silently lost. Manager-gated."""
+	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can delete a project."), frappe.PermissionError)
+	code = (code or "").replace("P-", "", 1)
+	if not frappe.db.exists("Realty Project", code):
+		frappe.throw(_("Project {0} not found.").format(code))
+	pname = frappe.db.get_value("Realty Project", code, "project_name")
+	sold = frappe.db.count("Realty Unit", {"project": code, "status": "Sold"})
+	if sold:
+		frappe.throw(_("Can't delete {0}: {1} unit(s) are sold. Unwind those first.").format(pname, sold))
+	nbook = frappe.db.count("Realty Booking", {"project_name": pname}) if pname else 0
+	if nbook:
+		frappe.throw(_("Can't delete {0}: it has {1} booking(s).").format(pname, nbook))
+	nleads = frappe.db.count("Realty Lead", {"project": code})
+	if nleads:
+		frappe.throw(_("Can't delete {0}: {1} lead(s) reference it — reassign them first.").format(pname, nleads))
+	# safe to cascade: units (+ their holds), site visits, then the project
+	units = frappe.get_all("Realty Unit", filters={"project": code}, pluck="name")
+	for uid in units:
+		for h in frappe.get_all("Realty Unit Hold", filters={"unit": uid}, pluck="name"):
+			frappe.delete_doc("Realty Unit Hold", h, force=1, ignore_permissions=True)
+		frappe.delete_doc("Realty Unit", uid, force=1, ignore_permissions=True)
+	for v in frappe.get_all("Realty Site Visit", filters={"project": code}, pluck="name"):
+		frappe.delete_doc("Realty Site Visit", v, force=1, ignore_permissions=True)
+	frappe.delete_doc("Realty Project", code, force=1, ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "deleted": code, "units": len(units)}
+
+
+@frappe.whitelist()
+def add_source(name):
+	"""Add a lead source (the New-Lead 'Source' dropdown). Manager-gated."""
+	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can manage sources."), frappe.PermissionError)
+	name = (name or "").strip()
+	if not name:
+		frappe.throw(_("Source name is required."))
+	if not frappe.db.exists("Realty Lead Source", name):
+		frappe.get_doc({"doctype": "Realty Lead Source", "source_name": name}).insert(ignore_permissions=True)
+		frappe.db.commit()
+	return {"ok": True, "name": name}
+
+
+@frappe.whitelist()
+def delete_source(name):
+	"""Remove a lead source. Refuses if any lead still uses it. Manager-gated."""
+	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can manage sources."), frappe.PermissionError)
+	name = (name or "").strip()
+	if not frappe.db.exists("Realty Lead Source", name):
+		return {"ok": True, "name": name}
+	used = frappe.db.count("Realty Lead", {"source": name})
+	if used:
+		frappe.throw(_("Can't remove “{0}”: {1} lead(s) use it.").format(name, used))
+	frappe.delete_doc("Realty Lead Source", name, force=1, ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "name": name}
 
 
 @frappe.whitelist()

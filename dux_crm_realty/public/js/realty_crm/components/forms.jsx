@@ -558,6 +558,77 @@ window.LeadPicker = function LeadPicker({ value, onChange, defaultProject }) {
   );
 };
 
+// ---------- Add team member (Settings) ----------
+const REP_LOGIN_ROLES = [
+  ["Realty Sales Executive", "Sales Executive"],
+  ["Realty Sales Manager", "Sales Manager"],
+  ["Realty Finance", "Finance"],
+  ["Realty Admin", "Admin"],
+];
+window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
+  const init = () => ({ full_name: "", role: "Sales Executive", phone: "", email: "", createLogin: false, frappeRole: "Realty Sales Executive" });
+  const [form, setForm] = useStateF(init);
+  const [busy, setBusy] = useStateF(false);
+  useEffectF(() => { if (open) { setForm(init()); setBusy(false); } }, [open]);
+  const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  if (!open) return null;
+  const save = async () => {
+    if (!form.full_name.trim()) { frappe.msgprint("Name is required."); return; }
+    if (form.createLogin && !form.email.trim()) { frappe.msgprint("An email is required to create a login."); return; }
+    setBusy(true);
+    try {
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.create_rep", args: { payload: form } });
+      frappe.show_alert({ message: form.full_name + " added" + (r.message.login ? " · login " + r.message.login : ""), indicator: "green" });
+      onSaved && await onSaved();
+      onClose();
+    } catch (e) { frappe.msgprint(e.message || "Could not add member"); setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} eyebrow="TEAM" title="Add a team member"
+      subtitle="Add a sales rep — and optionally create an ERPNext login so holds & leads are attributed to them."
+      width={600}
+      footer={<>
+        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Adding…" : "Add member"}</Btn>
+      </>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Full name" required span={2}><Input autoFocus placeholder="e.g. Anita Kulkarni" value={form.full_name} onChange={(e) => u("full_name", e.target.value)} /></Field>
+        <Field label="Title / role">
+          <Select value={form.role} onChange={(e) => u("role", e.target.value)}>
+            {["Sales Executive", "Sales Manager", "Telecaller", "Finance", "Admin"].map(r => <option key={r}>{r}</option>)}
+          </Select>
+        </Field>
+        <Field label="Phone"><Input placeholder="+91…" value={form.phone} onChange={(e) => u("phone", e.target.value)} /></Field>
+        <Field label="Email" span={2} hint="Used as the ERPNext login id, if you create one"><Input type="email" placeholder="name@shradha.in" value={form.email} onChange={(e) => u("email", e.target.value)} /></Field>
+        <div style={{ gridColumn: "span 2", padding: 14, border: "1px solid var(--hairline)", borderRadius: 10, background: "var(--neutral-50)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <button onClick={(e) => { e.preventDefault(); u("createLogin", !form.createLogin); }} style={{
+              width: 18, height: 18, borderRadius: 5, cursor: "pointer", flexShrink: 0,
+              border: "1.5px solid " + (form.createLogin ? "var(--dux-navy)" : "var(--neutral-300)"),
+              background: form.createLogin ? "var(--dux-navy)" : "transparent",
+              color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center",
+            }}>{form.createLogin && <Icon name="check" size={12} />}</button>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Create an ERPNext login for this person</span>
+          </label>
+          {form.createLogin && (
+            <div style={{ marginTop: 12 }}>
+              <Field label="Login role">
+                <Select value={form.frappeRole} onChange={(e) => u("frappeRole", e.target.value)}>
+                  {REP_LOGIN_ROLES.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
+                </Select>
+              </Field>
+              <div style={{ fontSize: 11, color: "var(--neutral-500)", marginTop: 8, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                <Icon name="user" size={13} style={{ marginTop: 1, color: "var(--dux-amber-600)" }} />
+                <span>Creates a Frappe/ERPNext User (no password — they set one via “Forgot password”). The login is linked to this rep so their holds and leads are attributed correctly.</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 // ---------- Hold / Reserve request modal (inventory) ----------
 window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initialKind, onSaved }) {
   const data = window.CRM_DATA;

@@ -7,6 +7,7 @@ window.PageSettings = function PageSettings() {
   const sections = [
     { id: "workspace", label: "Workspace" },
     { id: "team", label: "Team & roles" },
+    { id: "projects", label: "Projects" },
     { id: "stages", label: "Lead stages" },
     { id: "sources", label: "Sources" },
     { id: "templates", label: "Templates" },
@@ -28,17 +29,21 @@ window.PageSettings = function PageSettings() {
         ))}
       </nav>
 
-      <div style={{ overflow: "auto", padding: 32, maxWidth: 880 }}>
+      <div style={{ overflow: "auto", padding: 32, maxWidth: 920 }}>
         {section === "workspace" && <WorkspaceSettings />}
         {section === "team" && <TeamSettings />}
+        {section === "projects" && <ProjectsSettings />}
         {section === "stages" && <StagesSettings />}
-        {section === "sources" && <SimpleListSettings title="Lead sources" items={["Walk-in", "Website", "Channel Partner", "99acres", "MagicBricks", "Facebook", "Instagram", "Newspaper", "Hoarding", "Referral"]} />}
+        {section === "sources" && <SourcesSettings />}
         {section === "templates" && <SimpleListSettings title="Message templates" items={["Welcome SMS", "Visit confirmation", "Follow-up call script", "Booking confirmation", "Payment reminder", "Possession invite"]} />}
         {section === "integrations" && <IntegrationsSettings />}
       </div>
     </div>
   );
 };
+
+const isMgr = () => !!(window.CRM_DATA && window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.isManager);
+const refreshCRM = async () => { if (window.__refreshCRM) await window.__refreshCRM(); };
 
 function WorkspaceSettings() {
   return (
@@ -71,41 +76,121 @@ function WorkspaceSettings() {
 }
 
 function TeamSettings() {
-  const team = [
-    { name: "Priya Mehta", role: "Sales Lead", email: "priya@shradha.in", status: "active" },
-    { name: "Rohan Bhide", role: "Sales Executive", email: "rohan@shradha.in", status: "active" },
-    { name: "Anita Kulkarni", role: "Sales Executive", email: "anita@shradha.in", status: "active" },
-    { name: "Vivek Joshi", role: "CRM Manager", email: "vivek@shradha.in", status: "active" },
-    { name: "Sunita Rao", role: "Accounts", email: "sunita@shradha.in", status: "active" },
-    { name: "Amit Deshpande", role: "Site Manager", email: "amit@shradha.in", status: "invited" },
-  ];
+  const data = window.CRM_DATA;
+  const team = data.owners || [];
+  const [addOpen, setAddOpen] = React.useState(false);
+  const manager = isMgr();
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Team & roles</div>
-          <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>{team.length} members across Shradha Realty</div>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Team &amp; roles</div>
+          <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>{team.length} sales {team.length === 1 ? "rep" : "reps"} · holds &amp; leads are attributed to whoever has a login</div>
         </div>
-        <Btn variant="primary" size="sm" icon="plus">Invite member</Btn>
+        {manager && <Btn variant="primary" size="sm" icon="plus" onClick={() => setAddOpen(true)}>Add member</Btn>}
       </div>
       <div style={{ marginTop: 24, background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, overflow: "hidden" }}>
         {team.map((m, i) => (
-          <div key={m.email} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "auto 1fr auto auto auto", gap: 14, alignItems: "center", borderTop: i ? "1px solid var(--hairline)" : "none" }}>
-            <Avatar name={m.name} initials={m.name.split(" ").map(w => w[0]).join("")} size={36} />
-            <div>
+          <div key={m.id || m.name} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 14, alignItems: "center", borderTop: i ? "1px solid var(--hairline)" : "none" }}>
+            <Avatar name={m.name} initials={m.initials} size={36} />
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>{m.name}</div>
-              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{m.email}</div>
+              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{m.login || m.phone || "—"}</div>
             </div>
             <span style={{ fontSize: 11, color: "var(--neutral-600)", fontWeight: 600 }}>{m.role}</span>
             <span style={{
               fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 999, textTransform: "uppercase",
-              background: m.status === "active" ? "rgba(86,138,79,0.12)" : "var(--dux-amber-100)",
-              color: m.status === "active" ? "var(--success)" : "var(--dux-amber-600)",
-            }}>{m.status}</span>
-            <Btn variant="ghost" size="sm">Edit</Btn>
+              background: m.login ? "rgba(86,138,79,0.12)" : "var(--neutral-100)",
+              color: m.login ? "var(--success)" : "var(--neutral-400)",
+            }}>{m.login ? "Has login" : "No login"}</span>
           </div>
         ))}
+        {team.length === 0 && <div style={{ padding: 24, fontSize: 13, color: "var(--neutral-400)" }}>No team members yet.</div>}
       </div>
+      <AddRepModal open={addOpen} onClose={() => setAddOpen(false)} onSaved={refreshCRM} />
+    </div>
+  );
+}
+
+function ProjectsSettings() {
+  const data = window.CRM_DATA;
+  const projects = data.projects || [];
+  const manager = isMgr();
+  const del = (p) => {
+    frappe.confirm(
+      `Delete <b>${p.name}</b>? This removes its towers, units and hold history. Sold units, bookings or linked leads will block the delete.`,
+      async () => {
+        try {
+          const r = await frappe.call({ method: "dux_crm_realty.api.crm.delete_project", args: { code: p.id } });
+          frappe.show_alert({ message: p.name + " deleted (" + r.message.units + " units)", indicator: "orange" });
+          await refreshCRM();
+        } catch (e) { frappe.msgprint(e.message || "Could not delete project"); }
+      }
+    );
+  };
+  return (
+    <div>
+      <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Projects</div>
+      <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>Create projects from Inventory → New project. Delete is blocked when a project has sold units, bookings or linked leads.</div>
+      <div style={{ marginTop: 24, background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, overflow: "hidden" }}>
+        {projects.map((p, i) => (
+          <div key={p.id} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 14, alignItems: "center", borderTop: i ? "1px solid var(--hairline)" : "none" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, padding: "3px 7px", borderRadius: 4, background: "var(--neutral-100)", color: "var(--neutral-600)" }}>{p.code}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
+              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{p.locality ? p.locality + ", " : ""}{p.city} · {p.type}</div>
+            </div>
+            <span style={{ fontSize: 12, color: "var(--neutral-500)" }}>{p.totalUnits || 0} units · {p.sold || 0} sold</span>
+            {manager
+              ? <Btn variant="ghost" size="sm" icon="x" onClick={() => del(p)}>Delete</Btn>
+              : <span style={{ fontSize: 11, color: "var(--neutral-300)" }}>—</span>}
+          </div>
+        ))}
+        {projects.length === 0 && <div style={{ padding: 24, fontSize: 13, color: "var(--neutral-400)" }}>No projects yet.</div>}
+      </div>
+    </div>
+  );
+}
+
+function SourcesSettings() {
+  const data = window.CRM_DATA;
+  const sources = data.sources || [];
+  const manager = isMgr();
+  const [adding, setAdding] = React.useState("");
+  const add = async () => {
+    const name = adding.trim();
+    if (!name) return;
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.add_source", args: { name } });
+      setAdding("");
+      await refreshCRM();
+    } catch (e) { frappe.msgprint(e.message || "Could not add source"); }
+  };
+  const remove = async (name) => {
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.delete_source", args: { name } });
+      await refreshCRM();
+    } catch (e) { frappe.msgprint(e.message || "Could not remove source"); }
+  };
+  return (
+    <div>
+      <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Lead sources</div>
+      <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>These power the “Source” dropdown when capturing a new lead.</div>
+      <div style={{ marginTop: 24, display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {sources.map(it => (
+          <div key={it} style={{ padding: "8px 14px", background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 999, fontSize: 13, fontWeight: 500, display: "inline-flex", alignItems: "center", gap: 8 }}>
+            {it}
+            {manager && <button onClick={() => remove(it)} title="Remove" style={{ border: 0, background: "transparent", color: "var(--neutral-400)", cursor: "pointer", display: "inline-flex" }}><Icon name="x" size={13} /></button>}
+          </div>
+        ))}
+        {sources.length === 0 && <span style={{ fontSize: 13, color: "var(--neutral-400)" }}>No sources yet.</span>}
+      </div>
+      {manager && (
+        <div style={{ marginTop: 20, display: "flex", gap: 8, maxWidth: 360 }}>
+          <input className="dux-input" placeholder="Add a source…" value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} style={{ flex: 1 }} />
+          <Btn variant="outline" size="sm" icon="plus" onClick={add}>Add</Btn>
+        </div>
+      )}
     </div>
   );
 }
