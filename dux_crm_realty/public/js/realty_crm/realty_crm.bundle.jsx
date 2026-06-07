@@ -23,6 +23,8 @@ import "./pages/page-partners.jsx";
 import "./pages/page-reports.jsx";
 import "./pages/page-settings.jsx";
 import "./pages/campaigns.jsx";
+import "./pages/page-documents.jsx";
+import "./pages/page-approvals.jsx";
 import "./pages/workspace.jsx";
 import "./app-root.jsx";
 

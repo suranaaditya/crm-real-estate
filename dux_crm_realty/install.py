@@ -60,7 +60,7 @@ def _perms(extra_full=None, exec_write=True, finance_write=False):
 
 
 def make_doctype(name, fields, autoname=None, istable=0, title_field=None,
-		search_fields=None, perms=None):
+		search_fields=None, perms=None, allow_rename=1):
 	if frappe.db.exists("DocType", name):
 		return
 	doc = {
@@ -72,7 +72,7 @@ def make_doctype(name, fields, autoname=None, istable=0, title_field=None,
 		"fields": fields,
 		"sort_field": "modified",
 		"sort_order": "DESC",
-		"allow_rename": 1,
+		"allow_rename": allow_rename,
 		"track_changes": 1,
 		"istable": istable,
 	}
@@ -398,6 +398,70 @@ def create_doctypes():
 		f("contact_phone", "Data", "Outside Contact Phone"),
 		f("note", "Small Text", "Note"),
 		f("sec_break_hold_close", "Section Break", "Closure"),
+		f("closed_by", "Data", "Closed By"),
+		f("closed_on", "Datetime", "Closed On"),
+		f("close_reason", "Data", "Close Reason"),
+	])
+
+	# ---- DMS: stored document (one row per uploaded file) ----
+	# File lives as a PRIVATE Frappe File attached to this doc (attached_to_doctype/name);
+	# file_url is NEVER shipped to the client — internal downloads go via download_document,
+	# external sharing only via an approved Realty Document Share link. allow_rename=0 keeps
+	# the audit id immutable.
+	make_doctype("Realty Document", autoname="field:document_id", title_field="title",
+		search_fields="title,project,category,tags_text", allow_rename=0, fields=[
+		f("document_id", "Data", "Document ID", reqd=1, unique=1, in_list_view=1),
+		f("title", "Data", "Title", reqd=1, in_list_view=1),
+		f("category", "Select", "Category", in_list_view=1, default="Other",
+			options="Brochure\nCost Sheet\nFloor Plan\nAgreement\nKYC\nPrice List\n"
+				"Allotment Letter\nReceipt\nRERA\nLegal\nOther"),
+		f("status", "Select", "Status", options="Active\nArchived", default="Active", in_list_view=1),
+		f("tags_text", "Small Text", "Tags"),
+		f("col_break_doc1", "Column Break"),
+		f("project", "Link", "Project", options="Realty Project", reqd=1, in_list_view=1),
+		f("unit", "Link", "Unit", options="Realty Unit"),
+		f("lead", "Link", "Lead", options="Realty Lead"),
+		f("booking", "Link", "Booking", options="Realty Booking"),
+		f("shareable", "Check", "Shareable", default="0"),
+		f("sec_break_doc_file", "Section Break", "File"),
+		f("file_doc", "Link", "File", options="File"),
+		f("file_url", "Data", "File URL", read_only=1),
+		f("file_name", "Data", "File Name", read_only=1),
+		f("file_size", "Int", "File Size (bytes)", read_only=1),
+		f("mime_type", "Data", "MIME Type", read_only=1),
+		f("content_hash", "Data", "Content Hash", read_only=1),
+		f("col_break_doc2", "Column Break"),
+		f("uploaded_by", "Data", "Uploaded By"),
+		f("uploaded_on", "Datetime", "Uploaded On"),
+		f("notes", "Small Text", "Notes"),
+	])
+
+	# ---- DMS: document share ledger (one row per share request; mirrors Realty Unit Hold) ----
+	# State machine: Requested -> Approved (key minted, link live) -> Rejected/Revoked/Expired.
+	# share_key is unguessable + UNIQUE, minted ONLY on manager approval. allow_rename=0.
+	make_doctype("Realty Document Share", autoname="field:share_id", title_field="share_id",
+		search_fields="document,lead,requested_by", allow_rename=0, fields=[
+		f("share_id", "Data", "Share ID", reqd=1, unique=1, in_list_view=1),
+		f("document", "Link", "Document", options="Realty Document", reqd=1, in_list_view=1),
+		f("document_title", "Data", "Document Title"),
+		f("lead", "Link", "Shared With (Lead)", options="Realty Lead", reqd=1, in_list_view=1),
+		f("lead_name", "Data", "Lead Name"),
+		f("status", "Select", "Status", in_list_view=1, default="Requested",
+			options="Requested\nApproved\nRejected\nRevoked\nExpired"),
+		f("channel", "Select", "Channel", options="Link\nComms", default="Link"),
+		f("col_break_share1", "Column Break"),
+		f("requested_by", "Link", "Requested By", options="Realty Sales Owner", in_list_view=1),
+		f("requested_on", "Datetime", "Requested On"),
+		f("approved_by", "Data", "Approved By"),
+		f("approved_on", "Datetime", "Approved On"),
+		f("note", "Small Text", "Note"),
+		f("sec_break_share_link", "Section Break", "Share Link"),
+		f("share_key", "Data", "Share Key", read_only=1, unique=1),
+		f("expires_on", "Datetime", "Expires On"),
+		f("access_count", "Int", "Access Count", default="0"),
+		f("last_accessed_on", "Datetime", "Last Accessed On"),
+		f("last_accessed_ip", "Data", "Last Accessed IP"),
+		f("sec_break_share_close", "Section Break", "Closure"),
 		f("closed_by", "Data", "Closed By"),
 		f("closed_on", "Datetime", "Closed On"),
 		f("close_reason", "Data", "Close Reason"),

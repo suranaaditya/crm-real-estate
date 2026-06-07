@@ -143,7 +143,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
           {tab === "activity" && <ActivityTab lead={lead} activities={activities} setActivities={setActivities} />}
           {tab === "tasks" && <TasksTab lead={lead} owners={data.owners} />}
           {tab === "units" && <UnitsTab inv={data.inventory[lead.project]} lead={lead} />}
-          {tab === "docs" && <DocsTab docs={data.documents} />}
+          {tab === "docs" && <DocsTab lead={lead} />}
           {tab === "pricing" && <PricingTab lead={lead} />}
         </div>
       </div>
@@ -438,28 +438,199 @@ function UnitsTab({ inv, lead }) {
   );
 }
 
-function DocsTab({ docs }) {
+// ---------- DMS helpers (shared by the drawer DocsTab) ----------
+window.fmtBytes = (n) => {
+  if (n == null) return "—";
+  if (n >= 1048576) return (n / 1048576).toFixed(1).replace(/\.0$/, "") + " MB";
+  if (n >= 1024) return Math.max(1, Math.round(n / 1024)) + " KB";
+  return n + " B";
+};
+window.downloadDocument = (docId) =>
+  window.open("/api/method/dux_crm_realty.api.crm.download_document?document=" + encodeURIComponent(docId), "_blank");
+window.copyShareLink = (url) => {
+  if (!url) return;
+  (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(
+    () => frappe.show_alert({ message: "Share link copied", indicator: "green" }),
+    () => window.prompt("Copy this share link:", url));
+};
+
+function DocsTab({ lead }) {
+  // re-resolve the lead's docs from fresh data each render (survives __refreshCRM)
+  const fresh = (window.CRM_DATA.leads || []).find(l => l.id === lead.id) || lead;
+  const docs = fresh.documents || [];
+  const data = window.CRM_DATA;
+  const isManager = !!(data.currentUser && data.currentUser.isManager);
+  const me = (data.currentUser && data.currentUser.name) || "";
+  const [uploadOpen, setUploadOpen] = ldUseState(false);
+  const [cat, setCat] = ldUseState("all");
+  const [q, setQ] = ldUseState("");
+  const [history, setHistory] = ldUseState(null);   // { docId, rows } | null
+
+  const cats = ["all", ...Array.from(new Set(docs.map(d => d.category).filter(Boolean)))];
+  const query = q.trim().toLowerCase();
+  const shown = docs.filter(d =>
+    (cat === "all" || d.category === cat) &&
+    (!query || `${d.title} ${(d.tags || []).join(" ")} ${d.category}`.toLowerCase().includes(query)));
+
+  const act = async (method, args, msg, ind) => {
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm." + method, args });
+      frappe.show_alert({ message: msg, indicator: ind || "blue" });
+      if (window.__refreshCRM) await window.__refreshCRM();
+    } catch (e) { frappe.msgprint(e.message || "Action failed"); }
+  };
+  const showHistory = async (docId) => {
+    try {
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.get_document_shares", args: { document: docId } });
+      setHistory({ docId, rows: r.message || [] });
+    } catch (e) { frappe.msgprint(e.message || "Could not load history"); }
+  };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {docs.map((d, i) => (
-        <div key={i} style={{
-          display: "flex", alignItems: "center", gap: 14, padding: "12px 14px",
-          border: "1px solid var(--hairline)", borderRadius: 10,
-        }}>
-          <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--neutral-100)",
-            display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--neutral-600)" }}>
-            <Icon name="file" size={16} />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{d.name}</div>
-            <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{d.size} · uploaded {fmtRelative(d.at)}</div>
-          </div>
-          <button style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="download" size={14} /></button>
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <div className="dux-eyebrow" style={{ fontSize: 10, flex: 1 }}>Documents · {docs.length}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--neutral-50)", border: "1px solid var(--hairline)", borderRadius: 8, padding: "6px 10px", width: 180 }}>
+          <Icon name="search" size={13} style={{ color: "var(--neutral-400)" }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search docs…"
+            style={{ border: 0, outline: "none", background: "transparent", flex: 1, minWidth: 0, fontSize: 12, fontFamily: "var(--font-body)" }} />
         </div>
-      ))}
+        <Btn variant="accent" size="sm" icon="upload" onClick={() => setUploadOpen(true)}>Upload</Btn>
+      </div>
+
+      {cats.length > 2 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+          {cats.map(c => (
+            <FilterChip key={c} active={cat === c} onClick={() => setCat(c)}>{c === "all" ? "All" : c}</FilterChip>
+          ))}
+        </div>
+      )}
+
+      {shown.length === 0 && (
+        <div style={{ padding: 28, textAlign: "center", border: "1px dashed var(--hairline)", borderRadius: 12, color: "var(--neutral-400)", fontSize: 13 }}>
+          {docs.length === 0 ? "No documents yet. Upload a brochure, cost sheet or KYC doc for this lead." : "No documents match your filter."}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {shown.map(d => {
+          const share = (d.shares || []).find(s => s.leadId === lead.id);
+          return (
+            <div key={d.id} style={{ border: "1px solid var(--hairline)", borderRadius: 10, padding: "12px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--neutral-100)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--neutral-600)", flexShrink: 0 }}>
+                  <Icon name="file" size={16} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {d.title}
+                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.05em", padding: "2px 6px", borderRadius: 4, background: "var(--neutral-100)", color: "var(--neutral-600)", textTransform: "uppercase" }}>{d.category}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--neutral-400)", marginTop: 2 }}>
+                    {fmtBytes(d.size)} · uploaded {fmtRelative(d.at)}{d.uploadedBy ? " · " + d.uploadedBy : ""}
+                  </div>
+                  {(d.tags || []).length > 0 && (
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+                      {d.tags.map(t => <span key={t} style={tagChip}>{t}</span>)}
+                    </div>
+                  )}
+                </div>
+                <button onClick={() => downloadDocument(d.id)} title="Download" style={{ ...iconBtn, width: 32, height: 32, flexShrink: 0 }}><Icon name="download" size={14} /></button>
+              </div>
+
+              {/* share row for THIS lead */}
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--hairline)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {share && share.status === "Approved" && (
+                  <>
+                    <span style={shareTag("var(--success)", "var(--success-bg)")}><Icon name="check" size={11} /> Shared · {share.accessCount || 0} open{(share.accessCount || 0) === 1 ? "" : "s"}</span>
+                    {share.shareUrl && <Btn variant="outline" size="sm" icon="copy" onClick={() => copyShareLink(share.shareUrl)}>Copy link</Btn>}
+                    {isManager && <Btn variant="ghost" size="sm" onClick={() => act("revoke_share", { share_id: share.id }, "Share revoked", "orange")}>Revoke</Btn>}
+                  </>
+                )}
+                {share && share.status === "Requested" && (
+                  <>
+                    <span style={shareTag("var(--dux-amber-600)", "var(--dux-amber-100)")}><Icon name="clock" size={11} /> Share pending approval</span>
+                    {isManager
+                      ? <>
+                          <Btn variant="accent" size="sm" icon="check" onClick={() => act("approve_share", { share_id: share.id }, "Share approved", "green")}>Approve</Btn>
+                          <Btn variant="ghost" size="sm" onClick={() => act("reject_share", { share_id: share.id }, "Request declined", "orange")}>Decline</Btn>
+                        </>
+                      : (me === share.requestedBy
+                          ? <Btn variant="ghost" size="sm" onClick={() => act("reject_share", { share_id: share.id }, "Request cancelled", "orange")}>Cancel</Btn>
+                          : <span style={{ fontSize: 12, color: "var(--neutral-500)" }}>Awaiting manager approval.</span>)}
+                  </>
+                )}
+                {!share && d.shareable && (
+                  <Btn variant="accent" size="sm" icon="link" onClick={() => act("request_share", { document: d.id, lead: lead.id }, "Share requested — pending approval", "blue")}>
+                    {isManager ? "Share with this lead" : "Request share"}
+                  </Btn>
+                )}
+                {!share && !d.shareable && (
+                  <span style={{ fontSize: 12, color: "var(--neutral-400)" }}>Not marked shareable.</span>
+                )}
+                <div style={{ flex: 1 }} />
+                <button onClick={() => showHistory(d.id)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: 11, fontWeight: 600, color: "var(--neutral-500)", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <Icon name="eye" size={12} /> Share history
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <UploadDocumentModal open={uploadOpen} onClose={() => setUploadOpen(false)}
+        project={lead.project} lead={lead.id}
+        onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
+      <ShareHistoryModal history={history} onClose={() => setHistory(null)} />
     </div>
   );
 }
+
+const tagChip = {
+  fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 999,
+  background: "var(--info-bg)", color: "var(--info)", fontFamily: "var(--font-body)",
+};
+const shareTag = (fg, bg) => ({
+  display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700,
+  padding: "4px 9px", borderRadius: 999, background: bg, color: fg, letterSpacing: "0.02em",
+});
+
+window.ShareHistoryModal = function ShareHistoryModal({ history, onClose }) {
+  if (!history) return null;
+  const STATUS_TONE = {
+    Approved: ["var(--success)", "var(--success-bg)"], Requested: ["var(--dux-amber-600)", "var(--dux-amber-100)"],
+    Rejected: ["var(--neutral-600)", "var(--neutral-100)"], Revoked: ["var(--error)", "var(--error-bg)"],
+    Expired: ["var(--neutral-600)", "var(--neutral-100)"],
+  };
+  return (
+    <LeadModal open={!!history} onClose={onClose} eyebrow="AUDIT TRAIL" title="Share history"
+      subtitle={history.docId} width={620}
+      footer={<Btn variant="ghost" size="sm" onClick={onClose}>Close</Btn>}>
+      {history.rows.length === 0 && <div style={{ fontSize: 13, color: "var(--neutral-400)" }}>This document has never been shared.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {history.rows.map((r, i) => {
+          const tone = STATUS_TONE[r.status] || STATUS_TONE.Requested;
+          return (
+            <div key={i} style={{ border: "1px solid var(--hairline)", borderRadius: 10, padding: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <span style={shareTag(tone[0], tone[1])}>{r.status}</span>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{r.leadName}</span>
+                <div style={{ flex: 1 }} />
+                {r.shareUrl && <Btn variant="outline" size="sm" icon="copy" onClick={() => copyShareLink(r.shareUrl)}>Copy link</Btn>}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--neutral-500)", lineHeight: 1.7 }}>
+                Requested by {r.requestedBy || "—"} on {r.requestedOn || "—"}
+                {r.approvedBy ? <> · approved by {r.approvedBy} on {r.approvedOn}</> : null}
+                {r.status === "Approved" ? <> · opened {r.accessCount || 0}×{r.lastAccessedOn ? " (last " + r.lastAccessedOn + ")" : ""}</> : null}
+                {r.closedBy ? <> · {r.closeReason || "Closed"} by {r.closedBy} on {r.closedOn}</> : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </LeadModal>
+  );
+};
 
 function PricingTab({ lead }) {
   const rows = (lead.costSheet && lead.costSheet.length)

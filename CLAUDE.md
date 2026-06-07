@@ -86,6 +86,8 @@ dux_crm_realty/                         # python package (app)
                                         #   project filter; "Site Visits" nav reuses it (teamView,
                                         #   Visits lens). Click a visit/linked item → opens lead drawer.
     pages/page-inventory.jsx, page-bookings.jsx, page-payments.jsx,
+    pages/page-documents.jsx        # DMS library (filters + upload + per-doc sharing)
+    pages/page-approvals.jsx        # unified manager inbox (holds + document shares)
     pages/page-partners.jsx, page-reports.jsx, page-settings.jsx, campaigns.jsx, workspace.jsx
 design-reference/                       # the original Claude-Design prototype (pixel source of truth)
 ```
@@ -104,11 +106,26 @@ loads the CSS as a plain asset, then `frappe.require("realty_crm.bundle.jsx")` a
 Realty **Project** (+ child Realty Tower; rollup fields total_units/sold/blocked/**reserved**/available),
 **Unit** (status **Available / Blocked / Reserved / Sold**), **Lead** (+ child Activity / Cost Sheet Item),
 **Site Visit**, **Booking**, **Payment Due**, **Channel Partner**, **Campaign**, **Task** (standalone,
-drives the calendar), and masters **Lead Stage / Lead Source / Sales Owner / Message Template /
+drives the calendar), **Unit Hold** (per-unit hold/reserve ledger), **Document** + **Document Share**
+(the DMS — see below), and masters **Lead Stage / Lead Source / Sales Owner / Message Template /
 Payment Plan**. Shapes map 1:1 to the prototype's `app/data.js`. Roles: `Realty Sales Executive /
 Sales Manager / Finance / Admin`. **Schema changes go via editing the doctype JSON + `bench migrate`**
 (mirror in `install.py` for fresh installs — `create_doctypes` is create-only and SKIPS existing
 doctypes, so it won't apply field/option changes to a live site).
+
+**DMS doctypes** (added):
+- **Realty Document** — one row per stored file. `project` (reqd) + optional `unit`/`lead`/`booking`,
+  `category` (Select), `tags_text` (CSV, normalized lowercase via `_norm_tags`), `shareable` (Check),
+  `status` (Active/Archived), and the file handle (`file_doc` Link→File, `file_url`, `file_name`,
+  `file_size`, `mime_type`, `content_hash`, all read-only) + `uploaded_by`/`uploaded_on`. The file is a
+  **private Frappe File** (`is_private=1`, `attached_to` the document) saved via
+  `frappe.utils.file_manager.save_file`. **`file_url` is NEVER shipped to the client** (see gotcha).
+- **Realty Document Share** — share ledger / audit trail + approval state machine (mirrors Realty Unit
+  Hold). `document` (reqd) + `lead` recipient (reqd), `status`
+  (**Requested→Approved→Rejected/Revoked/Expired**), `channel` (Link/Comms), `share_key` (read-only,
+  **unique**, minted ONLY on manager approval via `frappe.generate_hash(length=48)`), `expires_on`,
+  `access_count`/`last_accessed_*` (audit), `requested_by`/`approved_by`/`closed_*`. `allow_rename=0` on
+  both (audit identity is immutable — `make_doctype` now takes an `allow_rename` param).
 
 ## Key API (all in `api/crm.py`, whitelisted)
 
@@ -136,6 +153,21 @@ doctypes, so it won't apply field/option changes to a live site).
   unit (serialization point) — at most one Approved + one Requested hold per unit. `get_bootstrap`
   attaches active holds to each grid unit (`unit.holds`) + a top-level `pendingHolds`, and exposes
   `currentUser.isManager`; owners carry `phone`.
+- **DMS — documents + manager-approved sharing** (`api/crm.py`): `upload_document` (**multipart** — the
+  React app POSTs `FormData` via `fetch()` with `X-Frappe-CSRF-Token`, NOT `frappe.call`; reads
+  `frappe.request.files['file']`, saves a private File, all-or-nothing with rollback),
+  `update_document` (uploader/manager; un-sharing 1→0 HARD-REVOKES live shares, manager-gated),
+  `delete_document` (manager; cascades shares + File), `download_document` (desk-authenticated internal
+  download — re-checks `read` perm, streams via `get_file`, never hands out a `/private/files` URL),
+  `request_share` (any rep, doc must be `shareable`; always pending; one live share per (doc,lead)),
+  `approve_share`/`reject_share`/`revoke_share` (**approve+revoke are manager-only via `_is_manager()`**;
+  approve mints `share_key` idempotently; all lock the **share row** with `for_update`+`reload()` —
+  the share row is the serialization point, analog of the unit row for holds), `get_document_shares`
+  (full audit trail for one doc), and `view_shared_document(key)` (**`allow_guest=True`** + `@rate_limit`
+  from `frappe.rate_limiter` — the public link; serves the private bytes ONLY when Approved + unexpired
+  + still shareable; denial is byte-identical 403; lazy-expires; bumps `access_count`). `get_bootstrap`
+  adds `documents` (+ per-lead `documents` and `documentsByProject`), `pendingShares`, `activeShares`,
+  `docTags`, `docCategories`; `documents[].shares` carries each doc's active shares.
 
 ---
 
@@ -166,6 +198,27 @@ doctypes, so it won't apply field/option changes to a live site).
   lifecycle buttons (`set_unit_status` for Mark-sold/legacy-release; the hold endpoints for
   request/approve/release); the panel re-resolves the unit from the live grid each render so it never
   shows a stale object after a refresh.
+- **DMS sharing security model (read before touching it).** The manager-approval/revoke gate protects
+  the **external/guest** link only. The File is `is_private=1`, so a guest CANNOT hit `/private/files/...`
+  directly (Frappe 403s it) — the only public path is `view_shared_document(key)`, which streams the bytes
+  itself via `frappe.utils.file_manager.get_file(file_url)` (reads off disk, NO Realty Document perm check —
+  required so a Guest doesn't `PermissionError`). **Never ship `file_url` to the React client** (it isn't in
+  `get_bootstrap`/upload return); internal downloads go through `download_document` (re-checks `read` perm).
+  Internal policy: any logged-in user with `read` on Realty Document can download any doc via
+  `download_document` — that is intentional (reps need project docs); `shareable`/approval/revoke govern the
+  external surface, which is the brief's actual requirement. The share link is
+  `…/api/method/dux_crm_realty.api.crm.view_shared_document?key=<48-char hash>`; `share_key` is `unique`
+  and minted only on approve. Acceptance checks: guest curl to an approved key → bytes; guest curl to
+  `/private/files/<name>` → 403; revoked/expired/invalid key → 403; a Sales Executive calling
+  `approve_share`/`revoke_share`/`delete_document` → `PermissionError`.
+- **DMS upload is multipart, not `frappe.call`.** `frappe.call` is JSON-only; the upload helper
+  `window.__uploadDocument` (forms.jsx) POSTs `FormData` to `/api/method/…upload_document` with header
+  `X-Frappe-CSRF-Token: frappe.csrf_token` (guard for empty token → reload). Downloads open
+  `…/download_document?document=<id>` in a new tab (desk session cookie carries auth; GET needs no CSRF).
+  Shared DMS UI globals live across files: `__uploadDocument`/`UploadDocumentModal`/`RequestShareModal`
+  (forms.jsx), `downloadDocument`/`copyShareLink`/`fmtBytes`/`ShareHistoryModal` (lead-detail.jsx).
+- **`uploaded_on` shows as "in N d"** in the demo because file timestamps are the REAL clock while the app's
+  pinned "today" is 2026-04-29 (`fmtRelative` is relative to the pin). Cosmetic; consistent with the pin.
 - **Hold attribution identity is a known, documented limitation.** Actor identity comes from
   `_actor_owner()` (maps `frappe.session.user` → the `Realty Sales Owner.user` link, else falls back to
   the pinned persona). With ONE shared login (and reps not yet having Frappe Users) every actor
@@ -198,7 +251,22 @@ floors + a single penthouse on top); **Frappe desk sidebar hidden** on the CRM p
 elsewhere). **Unit hold/reserve approval workflow**: request (lead OR outside enquiry) → manager
 approves; holder can release / approve a hand-over; manager can override; per-unit audit log
 (`Realty Unit Hold`); panel shows holder + LEAD/OUTSIDE pill + contact; concurrency-safe via row
-locks (identity caveat above). Leads page fully functional. Verified live in-browser.
+locks (identity caveat above). Leads page fully functional.
+
+**Project DMS + Unified Approvals inbox** (added, verified live): a real Document Management System —
+**Documents** sidebar page (card grid with project/category/tag/free-text filters + upload), documents
+stored per project (+ optional unit/lead/booking) as **private Frappe File attachments**, tagging, and
+**manager-approved sharing with a lead** via an unguessable public link (`view_shared_document`) that a
+manager can **revoke** (link 403s) with a full **audit trail** (`get_document_shares` — who/when/opens).
+The lead drawer **Documents tab is now real** (was static — filtered to the lead's docs, upload + request-
+share + share status + history), and the **Inventory project view** shows a per-project documents panel.
+A new **Approvals** sidebar page (manager-only, live pending badge = holds + shares) is the **unified
+inbox**: pending inventory hold/reserve requests AND document-share requests in one place (tabs All /
+Inventory holds / Document shares), with an Active section to **release** holds and **revoke** shares /
+copy links. Approve/reject/revoke gate on real Frappe roles (`_is_manager()`). The full lifecycle
+(upload → request → approve → guest opens link → revoke → 403) was verified live in-browser + via curl,
+and backend acceptance tests confirmed the private-file ACL, role gating, idempotent approve, un-share
+hard-revoke, `delete_project` document cascade, and the `share_key` unique index.
 
 **Not yet / out of scope (production-build items):** real SMS/WhatsApp/email & payment gateways
 (`send_reminder` just logs a Communication), cost-sheet/agreement PDF generation, RERA hooks, native

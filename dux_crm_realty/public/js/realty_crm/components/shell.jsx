@@ -74,6 +74,14 @@ window.Icon = function Icon({ name, size = 16, className = "", style = {} }) {
     cp:        <><path d="M12 2 2 7v6c0 5 4 8 10 9 6-1 10-4 10-9V7l-10-5Z"/></>,
     money:     <><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 10v.01M18 14v.01"/></>,
     target:    <><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></>,
+    upload:    <><path d="M12 16V4m0 0 4 4m-4-4-4 4M4 20h16"/></>,
+    link:      <><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></>,
+    copy:      <><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></>,
+    clock:     <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
+    shield:    <><path d="M12 2 4 5v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V5l-8-3Z"/></>,
+    eye:       <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></>,
+    folder:    <><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></>,
+    tag:       <><path d="M3 11V5a2 2 0 0 1 2-2h6l9 9-8 8-9-9Z"/><circle cx="8" cy="8" r="1.4"/></>,
   };
   return <svg {...common}>{paths[name] || null}</svg>;
 };
@@ -143,11 +151,17 @@ window.ScoreChip = function ScoreChip({ score }) {
 
 // ---------- Sidebar (shared) ----------
 window.Sidebar = function Sidebar({ active = "leads", compact = false, onNav }) {
+  const cu = (window.CRM_DATA && window.CRM_DATA.currentUser) || {};
+  // live pending-approvals badge (holds + document shares) — only shown to managers
+  const pending = ((window.CRM_DATA || {}).pendingHolds || []).length
+    + ((window.CRM_DATA || {}).pendingShares || []).length;
   const nav = [
     { id: "dashboard", icon: "home",     label: "Dashboard" },
     { id: "calendar",  icon: "check",    label: "My Day" },
-    { id: "leads",     icon: "users",    label: "Leads",      badge: 38 },
-    { id: "visits",    icon: "calendar", label: "Site Visits", badge: 14 },
+    ...(cu.isManager ? [{ id: "approvals", icon: "inbox", label: "Approvals", badge: pending || undefined }] : []),
+    { id: "leads",     icon: "users",    label: "Leads" },
+    { id: "visits",    icon: "calendar", label: "Site Visits" },
+    { id: "documents", icon: "folder",   label: "Documents" },
     { id: "inventory", icon: "building", label: "Inventory" },
     { id: "bookings",  icon: "file",     label: "Bookings" },
     { id: "payments",  icon: "rupee",    label: "Payments" },

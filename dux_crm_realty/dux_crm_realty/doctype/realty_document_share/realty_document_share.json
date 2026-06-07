@@ -1,0 +1,246 @@
+{
+ "actions": [],
+ "autoname": "field:share_id",
+ "creation": "2026-06-07 14:48:19.151449",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "share_id",
+  "document",
+  "document_title",
+  "lead",
+  "lead_name",
+  "status",
+  "channel",
+  "col_break_share1",
+  "requested_by",
+  "requested_on",
+  "approved_by",
+  "approved_on",
+  "note",
+  "sec_break_share_link",
+  "share_key",
+  "expires_on",
+  "access_count",
+  "last_accessed_on",
+  "last_accessed_ip",
+  "sec_break_share_close",
+  "closed_by",
+  "closed_on",
+  "close_reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "share_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Share ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "document",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Document",
+   "options": "Realty Document",
+   "reqd": 1
+  },
+  {
+   "fieldname": "document_title",
+   "fieldtype": "Data",
+   "label": "Document Title"
+  },
+  {
+   "fieldname": "lead",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Shared With (Lead)",
+   "options": "Realty Lead",
+   "reqd": 1
+  },
+  {
+   "fieldname": "lead_name",
+   "fieldtype": "Data",
+   "label": "Lead Name"
+  },
+  {
+   "default": "Requested",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Requested\nApproved\nRejected\nRevoked\nExpired"
+  },
+  {
+   "default": "Link",
+   "fieldname": "channel",
+   "fieldtype": "Select",
+   "label": "Channel",
+   "options": "Link\nComms"
+  },
+  {
+   "fieldname": "col_break_share1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "requested_by",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Requested By",
+   "options": "Realty Sales Owner"
+  },
+  {
+   "fieldname": "requested_on",
+   "fieldtype": "Datetime",
+   "label": "Requested On"
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Data",
+   "label": "Approved By"
+  },
+  {
+   "fieldname": "approved_on",
+   "fieldtype": "Datetime",
+   "label": "Approved On"
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Small Text",
+   "label": "Note"
+  },
+  {
+   "fieldname": "sec_break_share_link",
+   "fieldtype": "Section Break",
+   "label": "Share Link"
+  },
+  {
+   "fieldname": "share_key",
+   "fieldtype": "Data",
+   "label": "Share Key",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "expires_on",
+   "fieldtype": "Datetime",
+   "label": "Expires On"
+  },
+  {
+   "default": "0",
+   "fieldname": "access_count",
+   "fieldtype": "Int",
+   "label": "Access Count"
+  },
+  {
+   "fieldname": "last_accessed_on",
+   "fieldtype": "Datetime",
+   "label": "Last Accessed On"
+  },
+  {
+   "fieldname": "last_accessed_ip",
+   "fieldtype": "Data",
+   "label": "Last Accessed IP"
+  },
+  {
+   "fieldname": "sec_break_share_close",
+   "fieldtype": "Section Break",
+   "label": "Closure"
+  },
+  {
+   "fieldname": "closed_by",
+   "fieldtype": "Data",
+   "label": "Closed By"
+  },
+  {
+   "fieldname": "closed_on",
+   "fieldtype": "Datetime",
+   "label": "Closed On"
+  },
+  {
+   "fieldname": "close_reason",
+   "fieldtype": "Data",
+   "label": "Close Reason"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-07 14:48:19.151449",
+ "modified_by": "Administrator",
+ "module": "Dux CRM Realty",
+ "name": "Realty Document Share",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Admin",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Sales Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Sales Executive",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Finance",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "document,lead,requested_by",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "share_id",
+ "track_changes": 1
+}

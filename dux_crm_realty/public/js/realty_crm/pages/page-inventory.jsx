@@ -1,7 +1,7 @@
 import React from "react";
 /* Inventory — tower selector + floor/unit grid. Uses CRM_DATA.abhimanGrid + projects. */
 
-window.PageInventory = function PageInventory({ search = "" }) {
+window.PageInventory = function PageInventory({ search = "", onNav }) {
   const data = window.CRM_DATA;
   const [activeProject, setActiveProject] = React.useState((data.projects[0] && data.projects[0].id) || "P-AN");
   const [filter, setFilter] = React.useState("all");
@@ -9,6 +9,7 @@ window.PageInventory = function PageInventory({ search = "" }) {
   const [holdModal, setHoldModal] = React.useState(null);          // {unit, kind} | null — request form
   const [showProjectModal, setShowProjectModal] = React.useState(false);
   const [showUnitsModal, setShowUnitsModal] = React.useState(false);
+  const [showDocUpload, setShowDocUpload] = React.useState(false); // upload doc to this project
   const [projQuery, setProjQuery] = React.useState("");   // filter the project tabs
 
   // Esc closes the persistent detail panel
@@ -87,6 +88,8 @@ window.PageInventory = function PageInventory({ search = "" }) {
   const meName = (data.currentUser && data.currentUser.name) || "";
   // Pending requests for the active project (manager approvals view).
   const pendingForProject = (data.pendingHolds || []).filter(h => h.project === activeProject);
+  // Documents stored against the active project (DMS surface in inventory).
+  const projectDocs = (data.documentsByProject || {})[activeProject] || [];
 
   // Direct status change (legacy Blocked/Reserved release, Mark sold, unwind sale).
   const applyStatus = async (unit, target, keepOpen) => {
@@ -230,6 +233,40 @@ window.PageInventory = function PageInventory({ search = "" }) {
             </div>
           </div>
         )}
+
+        {/* Project documents — DMS surface in the inventory view */}
+        <div style={{ background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, padding: 16, marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: projectDocs.length ? 12 : 0 }}>
+            <div className="dux-eyebrow" style={{ fontSize: 10, flex: 1, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Icon name="folder" size={13} style={{ color: "var(--neutral-400)" }} /> Documents · {projectDocs.length}
+            </div>
+            {projectDocs.length > 0 && onNav && <Btn variant="ghost" size="sm" onClick={() => onNav("documents")}>View all →</Btn>}
+            <Btn variant="outline" size="sm" icon="upload" onClick={() => setShowDocUpload(true)}>Upload to {proj.code}</Btn>
+          </div>
+          {projectDocs.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--neutral-400)" }}>No documents yet for {proj.name}. Add brochures, price lists, plans or legal papers.</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 8 }}>
+              {projectDocs.slice(0, 8).map(d => (
+                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid var(--hairline)", borderRadius: 10 }}>
+                  <div style={{ width: 30, height: 30, borderRadius: 7, background: "var(--neutral-100)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--neutral-600)", flexShrink: 0 }}>
+                    <Icon name="file" size={14} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</div>
+                    <div style={{ fontSize: 10, color: "var(--neutral-400)" }}>{d.category} · {fmtBytes(d.size)}</div>
+                  </div>
+                  <button onClick={() => downloadDocument(d.id)} title="Download" style={{ ...iconBtn, width: 28, height: 28, flexShrink: 0 }}><Icon name="download" size={13} /></button>
+                </div>
+              ))}
+              {projectDocs.length > 8 && onNav && (
+                <button onClick={() => onNav("documents")} style={{ border: "1px dashed var(--hairline)", borderRadius: 10, background: "var(--neutral-50)", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--dux-navy)", fontFamily: "var(--font-display)" }}>
+                  +{projectDocs.length - 8} more →
+                </button>
+              )}
+            </div>
+          )}
+        </div>
 
         {!grid && (
           <div style={{
@@ -446,6 +483,8 @@ window.PageInventory = function PageInventory({ search = "" }) {
         onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
       <HoldRequestModal open={!!holdModal} onClose={() => setHoldModal(null)}
         unit={holdModal && holdModal.unit} initialKind={holdModal && holdModal.kind}
+        onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
+      <UploadDocumentModal open={showDocUpload} onClose={() => setShowDocUpload(false)} project={activeProject}
         onSaved={async () => { if (window.__refreshCRM) await window.__refreshCRM(); }} />
     </div>
   );

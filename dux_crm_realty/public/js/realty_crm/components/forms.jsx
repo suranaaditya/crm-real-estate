@@ -839,3 +839,174 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
     </div>
   );
 };
+
+// ---------- DMS: multipart upload helper (fetch + CSRF; frappe.call is JSON-only) ----------
+window.__uploadDocument = async (file, { title, project, unit, lead, booking, category, tags, shareable }) => {
+  if (!frappe.csrf_token) { frappe.msgprint("Session expired — please reload the page."); return null; }
+  const fd = new FormData();
+  fd.append("file", file);
+  if (title) fd.append("title", title);
+  fd.append("project", project || "");
+  if (unit) fd.append("unit", unit);
+  if (lead) fd.append("lead", lead);
+  if (booking) fd.append("booking", booking);
+  fd.append("category", category || "Other");
+  fd.append("tags", tags || "");
+  fd.append("shareable", shareable ? 1 : 0);
+  let res;
+  try {
+    res = await fetch("/api/method/dux_crm_realty.api.crm.upload_document",
+      { method: "POST", headers: { "X-Frappe-CSRF-Token": frappe.csrf_token }, body: fd });
+  } catch (e) { frappe.msgprint("Upload failed — network error."); return null; }
+  if (!res.ok) {
+    let msg = "Upload failed (" + res.status + ")";
+    try {
+      const j = await res.json();
+      const sm = j._server_messages && JSON.parse(j._server_messages)[0];
+      if (sm) msg = JSON.parse(sm).message || msg;
+    } catch (e) {}
+    frappe.msgprint(msg); return null;
+  }
+  frappe.show_alert({ message: "Document uploaded", indicator: "green" });
+  if (window.__refreshCRM) await window.__refreshCRM();
+  return await res.json();
+};
+
+// ---------- DMS: upload-document modal (scope can be pre-filled by the caller) ----------
+window.UploadDocumentModal = function UploadDocumentModal({ open, onClose, onSaved,
+    project: lockProject, lead: lockLead, unit, booking }) {
+  const data = window.CRM_DATA;
+  const cats = data.docCategories || ["Other"];
+  const init = () => ({ title: "", category: "Brochure", tags: "", shareable: false,
+    project: lockProject || (data.projects && data.projects[0] && data.projects[0].id) || "", lead: lockLead || "" });
+  const [form, setForm] = useStateF(init);
+  const [file, setFile] = useStateF(null);
+  const [busy, setBusy] = useStateF(false);
+  const fileRef = useRefF(null);
+  useEffectF(() => { if (open) { setForm(init()); setFile(null); setBusy(false); } }, [open, lockProject, lockLead]);
+  const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  if (!open) return null;
+  const save = async () => {
+    if (!file) { frappe.msgprint("Choose a file to upload."); return; }
+    if (!form.project) { frappe.msgprint("Pick a project."); return; }
+    setBusy(true);
+    const r = await window.__uploadDocument(file, {
+      title: form.title.trim() || file.name, project: form.project,
+      unit: unit || null, lead: form.lead || null, booking: booking || null,
+      category: form.category, tags: form.tags, shareable: form.shareable });
+    setBusy(false);
+    if (r) { onSaved && await onSaved(r.message || r); onClose(); }
+  };
+  const proj = (data.projects || []).find(p => p.id === form.project);
+  return (
+    <Modal open={open} onClose={onClose} eyebrow="ADD DOCUMENT" title="Upload a document"
+      subtitle={lockProject && proj ? ("To " + proj.name) : "Store a document against a project (and optionally a unit / lead / booking)."}
+      width={640}
+      footer={<>
+        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="upload" onClick={save}>{busy ? "Uploading…" : "Upload"}</Btn>
+      </>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="File" required span={2}>
+          <div onClick={() => fileRef.current && fileRef.current.click()}
+            style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", cursor: "pointer",
+              border: "1px dashed " + (file ? "var(--dux-amber)" : "var(--hairline)"), borderRadius: 10,
+              background: file ? "var(--dux-amber-100)" : "var(--neutral-50)" }}>
+            <Icon name={file ? "file" : "upload"} size={18} style={{ color: file ? "var(--dux-amber-600)" : "var(--neutral-400)" }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--neutral-800)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {file ? file.name : "Click to choose a file"}</div>
+              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{file ? (Math.max(1, Math.round(file.size / 1024)) + " KB") : "PDF, image, Office docs · max 25 MB"}</div>
+            </div>
+            {file && <button onClick={(e) => { e.stopPropagation(); setFile(null); }} title="Remove" style={{ ...iconBtn, width: 28, height: 28 }}><Icon name="x" size={14} /></button>}
+          </div>
+          <input ref={fileRef} type="file" style={{ display: "none" }}
+            onChange={(e) => { const fl = e.target.files && e.target.files[0]; if (fl) { setFile(fl); if (!form.title) u("title", fl.name.replace(/\.[^.]+$/, "")); } }} />
+        </Field>
+        <Field label="Title" span={2}><Input placeholder="e.g. Tower B cost sheet v3" value={form.title} onChange={(e) => u("title", e.target.value)} /></Field>
+        <Field label="Category">
+          <Select value={form.category} onChange={(e) => u("category", e.target.value)}>{cats.map(c => <option key={c}>{c}</option>)}</Select>
+        </Field>
+        <Field label="Project" required>
+          {lockProject ? (
+            <Input value={proj ? proj.name : form.project} readOnly style={{ background: "var(--neutral-50)" }} />
+          ) : (
+            <Select value={form.project} onChange={(e) => u("project", e.target.value)}>
+              {(data.projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </Select>
+          )}
+        </Field>
+        <Field label="Tags" span={2} hint="Comma-separated — e.g. legal, rera, tower-b">
+          <Input placeholder="legal, brochure, tower-b" value={form.tags} onChange={(e) => u("tags", e.target.value)} />
+        </Field>
+        {!lockLead && (
+          <Field label="Link to a lead" span={2} hint="Optional — shows the doc on that lead's Documents tab">
+            <LeadPicker value={form.lead} onChange={(v) => u("lead", v)} defaultProject={form.project} />
+          </Field>
+        )}
+        <div style={{ gridColumn: "span 2", padding: 14, border: "1px solid var(--hairline)", borderRadius: 10, background: "var(--neutral-50)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <button onClick={(e) => { e.preventDefault(); u("shareable", !form.shareable); }} style={{
+              width: 18, height: 18, borderRadius: 5, cursor: "pointer", flexShrink: 0,
+              border: "1.5px solid " + (form.shareable ? "var(--dux-navy)" : "var(--neutral-300)"),
+              background: form.shareable ? "var(--dux-navy)" : "transparent",
+              color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center",
+            }}>{form.shareable && <Icon name="check" size={12} />}</button>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Mark as shareable</span>
+          </label>
+          <div style={{ fontSize: 11, color: "var(--neutral-500)", marginTop: 8, display: "flex", gap: 6, alignItems: "flex-start" }}>
+            <Icon name="shield" size={13} style={{ marginTop: 1, color: "var(--dux-amber-600)" }} />
+            <span>Shareable docs can be sent to a lead via a link — but every share still needs a manager's approval before it goes out.</span>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+// ---------- DMS: request-share modal (DMS page — lead not fixed, uses LeadPicker) ----------
+window.RequestShareModal = function RequestShareModal({ open, onClose, doc, onSaved }) {
+  const [lead, setLead] = useStateF("");
+  const [channel, setChannel] = useStateF("Link");
+  const [note, setNote] = useStateF("");
+  const [busy, setBusy] = useStateF(false);
+  useEffectF(() => { if (open) { setLead(""); setChannel("Link"); setNote(""); setBusy(false); } }, [open, doc]);
+  if (!open || !doc) return null;
+  const save = async () => {
+    if (!lead) { frappe.msgprint("Pick a lead to share with."); return; }
+    setBusy(true);
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.request_share",
+        args: { document: doc.id, lead, note, channel } });
+      frappe.show_alert({ message: "Share requested — pending manager approval", indicator: "blue" });
+      if (window.__refreshCRM) await window.__refreshCRM();
+      onSaved && await onSaved(); onClose();
+    } catch (e) { frappe.msgprint(e.message || "Could not request share"); setBusy(false); }
+  };
+  const ChannelToggle = () => (
+    <div style={{ display: "inline-flex", padding: 3, background: "var(--neutral-100)", borderRadius: 8, gap: 2 }}>
+      {[{ value: "Link", label: "Share a link" }, { value: "Comms", label: "Log in lead's comms" }].map(o => (
+        <button key={o.value} onClick={() => setChannel(o.value)} style={{
+          padding: "7px 16px", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600,
+          fontFamily: "var(--font-display)", background: channel === o.value ? "var(--bg)" : "transparent",
+          color: channel === o.value ? "var(--neutral-800)" : "var(--neutral-600)",
+          boxShadow: channel === o.value ? "var(--shadow-xs)" : "none",
+        }}>{o.label}</button>
+      ))}
+    </div>
+  );
+  return (
+    <Modal open={open} onClose={onClose} eyebrow="REQUEST SHARE" title={"Share “" + doc.title + "”"}
+      subtitle="Goes to a manager for approval. The link only goes live once approved." width={580}
+      footer={<>
+        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Submitting…" : "Request share"}</Btn>
+      </>}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <Field label="Share with (lead)"><LeadPicker value={lead} onChange={setLead} defaultProject={doc.project} /></Field>
+        <Field label="How" hint="A link is generated on approval; 'comms' also logs it on the lead's activity"><ChannelToggle /></Field>
+        <Field label="Note" hint="Optional — context for the approver"><Textarea rows={2} placeholder="Why share this, etc." value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+      </div>
+    </Modal>
+  );
+};

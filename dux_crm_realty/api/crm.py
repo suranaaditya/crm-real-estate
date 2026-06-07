@@ -13,6 +13,7 @@ import datetime
 
 import frappe
 from frappe import _
+from frappe.rate_limiter import rate_limit
 
 CRM_ROLES = (
 	"System Manager", "Realty Admin", "Realty Sales Manager",
@@ -36,6 +37,14 @@ _UNIT_UNWIND_ROLES = MANAGER_ROLES
 # A hold's "kind" maps to the unit status its approval produces.
 KIND_TO_STATUS = {"Hold": "Blocked", "Reserve": "Reserved"}
 
+# ---- DMS (document management + sharing) ----
+DOC_CATEGORIES = ("Brochure", "Cost Sheet", "Floor Plan", "Agreement", "KYC", "Price List",
+	"Allotment Letter", "Receipt", "RERA", "Legal", "Other")
+SHARE_TERMINAL = ("Rejected", "Revoked", "Expired")
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB cap
+ALLOWED_UPLOAD_EXT = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif",
+	".doc", ".docx", ".xls", ".xlsx", ".csv", ".ppt", ".pptx", ".txt"}
+
 
 def _is_manager():
 	return any(r in MANAGER_ROLES for r in frappe.get_roles())
@@ -53,15 +62,6 @@ def _actor_owner():
 	if name:
 		return name
 	return _current_owner().get("name")
-
-# Static illustrative documents (prototype lead-detail DocsTab is global).
-DOCUMENTS = [
-	{"name": "Cost-Sheet_AN_Tower-B_705_v3.pdf", "size": "412 KB", "at": "2026-04-28"},
-	{"name": "Brochure_Abhiman-Niwas.pdf", "size": "8.2 MB", "at": "2026-04-14"},
-	{"name": "PAN_RajeshKhandelwal.jpg", "size": "1.4 MB", "at": "2026-04-17"},
-	{"name": "Aadhaar_RajeshKhandelwal.pdf", "size": "1.1 MB", "at": "2026-04-17"},
-]
-
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -225,6 +225,68 @@ def get_bootstrap():
 		if h.status == "Requested":
 			pending_holds.append(sh)
 
+	# ---- DMS: document shares + documents (2 batched queries, N+1-safe) ----
+	is_mgr = _is_manager()
+	me_owner = _actor_owner()
+	now_dt = frappe.utils.now_datetime()
+
+	# active shares (Requested/Approved), grouped by document docname. share_key/shareUrl are
+	# exposed ONLY to a manager or the requester (never leaked broadly).
+	shares_by_doc, pending_shares, active_shares = {}, [], []
+	for s in frappe.get_all("Realty Document Share",
+			filters={"status": ["in", ["Requested", "Approved"]]},
+			fields=["share_id", "document", "lead", "lead_name", "document_title", "status",
+				"channel", "requested_by", "requested_on", "approved_by", "approved_on",
+				"share_key", "expires_on", "access_count"], order_by="creation asc"):
+		o = owner_by_name.get(s.requested_by) or {}
+		ll = _lead_lookup.get(s.lead) or {}
+		eff = _effective_share_status(s.status, s.expires_on, now_dt)
+		if eff == "Expired":
+			continue
+		expose = eff == "Approved" and s.share_key and (is_mgr or me_owner == s.requested_by)
+		sh = {"id": s.share_id, "document": s.document, "documentTitle": s.document_title,
+			"lead": s.lead, "leadId": ll.get("lead_id"), "leadName": s.lead_name,
+			"status": eff, "channel": s.channel, "isOutside": False,
+			"requestedBy": s.requested_by, "requestedByInitials": o.get("initials"),
+			"requestedByRole": o.get("role"), "requestedOn": _s(s.requested_on) or "",
+			"approvedBy": s.approved_by, "approvedOn": _s(s.approved_on),
+			"accessCount": s.access_count,
+			"shareUrl": (_share_url(s.share_key) if expose else None)}
+		shares_by_doc.setdefault(s.document, []).append(sh)
+		if eff == "Requested":
+			pending_shares.append(sh)
+		elif eff == "Approved":
+			active_shares.append(sh)
+
+	# documents (Active only), shaped + grouped by lead AND project. file_url is NOT shipped.
+	def _shape_doc(d):
+		ll = _lead_lookup.get(d.lead) or {}
+		return {"id": d.document_id, "name": d.title, "title": d.title, "category": d.category,
+			"tags": [t.strip() for t in (d.tags_text or "").split(",") if t.strip()],
+			"project": _pid(d.project), "projectName": proj_name_by_code.get(d.project),
+			"unit": d.unit, "lead": d.lead, "leadId": ll.get("lead_id"), "booking": d.booking,
+			"shareable": bool(d.shareable), "hasFile": bool(d.file_doc),
+			"fileName": d.file_name, "size": d.file_size, "mime": d.mime_type,
+			"uploadedBy": d.uploaded_by, "at": _s(d.uploaded_on), "notes": d.notes,
+			"shares": shares_by_doc.get(d.name, [])}
+	documents, docs_by_lead, docs_by_project, doc_tags = [], {}, {}, set()
+	for d in frappe.get_all("Realty Document", filters={"status": "Active"},
+			fields=["name", "document_id", "title", "category", "tags_text", "project", "unit",
+				"lead", "booking", "shareable", "file_doc", "file_name", "file_size",
+				"mime_type", "uploaded_by", "uploaded_on", "notes"], order_by="uploaded_on desc"):
+		if not d.file_doc:
+			continue
+		sd = _shape_doc(d)
+		documents.append(sd)
+		if d.lead:
+			docs_by_lead.setdefault(d.lead, []).append(sd)
+		docs_by_project.setdefault(_pid(d.project), []).append(sd)
+		for t in sd["tags"]:
+			doc_tags.add(t)
+	# attach each lead's documents (leads_raw / leads are parallel lists from the loop above)
+	for ld_raw, ld_dict in zip(leads_raw, leads):
+		ld_dict["documents"] = docs_by_lead.get(ld_raw.name, [])
+
 	grids = {}
 	floor7b = []
 	for u in units_raw:
@@ -328,7 +390,10 @@ def get_bootstrap():
 			{"id": o.owner_id, "name": o.full_name, "role": o.role, "initials": o.initials,
 			 "phone": o.phone, "login": o.user}
 			for o in owners],
-		"channelPartners": channel_partners, "leads": leads, "documents": DOCUMENTS,
+		"channelPartners": channel_partners, "leads": leads,
+		"documents": documents, "documentsByProject": docs_by_project,
+		"pendingShares": pending_shares, "activeShares": active_shares,
+		"docTags": sorted(doc_tags), "docCategories": list(DOC_CATEGORIES),
 		"inventory": {"P-AN": {"towers": an_towers, "units": floor7b}},
 		"abhimanGrid": grid, "grids": grids, "pendingHolds": pending_holds,
 		"visits": visits, "bookings": bookings,
@@ -747,6 +812,412 @@ def release_hold(hold_id, reason=None):
 
 
 # --------------------------------------------------------------------------- #
+# DMS — document management + manager-approved sharing
+# --------------------------------------------------------------------------- #
+def _resolve_lead(lead):
+	"""Accept a Realty Lead docname OR its lead_id; return the docname (or None)."""
+	lead = lead or None
+	if lead and not frappe.db.exists("Realty Lead", lead):
+		lead = frappe.db.get_value("Realty Lead", {"lead_id": lead}, "name") or None
+	return lead
+
+
+def _resolve_owner(name):
+	"""Accept a Realty Sales Owner full_name OR owner_id; return a VALID owner name or None
+	(so a bad value never breaks the requested_by Link on insert)."""
+	if not name:
+		return None
+	if frappe.db.exists("Realty Sales Owner", name):
+		return name
+	return frappe.db.get_value("Realty Sales Owner", {"owner_id": name}, "full_name") or None
+
+
+def _norm_tags(raw):
+	"""Canonical CSV: split on comma, strip, lowercase, drop empties, dedupe (order-preserving)."""
+	if not raw:
+		return None
+	seen, out = set(), []
+	for t in str(raw).split(","):
+		t = t.strip().lower()
+		if t and t not in seen:
+			seen.add(t)
+			out.append(t)
+	return ", ".join(out) or None
+
+
+def _share_url(key):
+	return frappe.utils.get_url("/api/method/dux_crm_realty.api.crm.view_shared_document?key=" + key) if key else None
+
+
+def _effective_share_status(status, expires_on, now=None):
+	"""An Approved share past its expiry reads as Expired for display (lazy expiry; the guest
+	endpoint also flips it on the next hit)."""
+	if status == "Approved" and expires_on:
+		if frappe.utils.get_datetime(expires_on) < (now or frappe.utils.now_datetime()):
+			return "Expired"
+	return status
+
+
+def _get_share(share_id):
+	if frappe.db.exists("Realty Document Share", share_id):
+		return frappe.get_doc("Realty Document Share", share_id)
+	name = frappe.db.get_value("Realty Document Share", {"share_id": share_id}, "name")
+	if not name:
+		frappe.throw(_("Share {0} not found.").format(share_id))
+	return frappe.get_doc("Realty Document Share", name)
+
+
+def _active_shares(document):
+	"""Live shares (Requested/Approved) for a document."""
+	return frappe.get_all("Realty Document Share",
+		filters={"document": document, "status": ["in", ["Requested", "Approved"]]},
+		fields=["name", "share_id", "status", "requested_by"], order_by="creation asc")
+
+
+def _close_active_shares(document, status, reason):
+	"""Move every live share on a document to a terminal status (used on un-share / delete)."""
+	who = _actor_owner()
+	for s in _active_shares(document):
+		d = frappe.get_doc("Realty Document Share", s.name)
+		d.status = status
+		d.closed_by = who
+		d.closed_on = frappe.utils.now()
+		d.close_reason = reason
+		d.save(ignore_permissions=True)
+
+
+def _log_share_comm(share, link):
+	"""Attach-in-comms: log a Communication on the lead embedding the public LINK (never the
+	private bytes) + a lead activity row so it shows in the drawer Activity tab."""
+	frappe.get_doc({
+		"doctype": "Communication", "communication_type": "Communication",
+		"communication_medium": "Email", "sent_or_received": "Sent",
+		"subject": f"Document shared — {share.document_title}",
+		"content": f"A document has been shared with you: {link}",
+		"reference_doctype": "Realty Lead", "reference_name": share.lead,
+	}).insert(ignore_permissions=True)
+	ld = frappe.get_doc("Realty Lead", share.lead)
+	ld.append("activities", {"activity_datetime": frappe.utils.now(),
+		"who": share.approved_by or _actor_owner(), "activity_type": "email",
+		"text": f"Document “{share.document_title}” shared via link."})
+	ld.last_activity = frappe.utils.nowdate()
+	ld.save(ignore_permissions=True)
+
+
+@frappe.whitelist()
+def upload_document(title=None, project=None, unit=None, lead=None, booking=None,
+		category="Other", tags=None, shareable=0, notes=None):
+	"""Multipart upload. The React app POSTs FormData via fetch() with X-Frappe-CSRF-Token
+	(frappe.call is JSON-only); the file arrives in frappe.request.files['file']. Stores a
+	PRIVATE Frappe File attached to a new Realty Document. All-or-nothing — any failure rolls
+	back so no orphan doc/File survives. file_url is NEVER returned (internal reads go through
+	download_document; external only via an approved share link)."""
+	_guard()
+	if not frappe.has_permission("Realty Document", "create"):
+		frappe.throw(_("Not permitted to upload documents."), frappe.PermissionError)
+	files = frappe.request.files if frappe.request else None
+	if not files or "file" not in files:
+		frappe.throw(_("No file received."))
+	up = files["file"]
+	content = up.read()
+	if not content:
+		frappe.throw(_("The uploaded file is empty."))
+	if len(content) > MAX_UPLOAD_BYTES:
+		frappe.throw(_("File too large (max {0} MB).").format(MAX_UPLOAD_BYTES // (1024 * 1024)))
+	import os
+	import mimetypes
+	from frappe.utils.file_manager import save_file
+	ext = os.path.splitext(up.filename or "")[1].lower()
+	if ext not in ALLOWED_UPLOAD_EXT:
+		frappe.throw(_("File type {0} is not allowed.").format(ext or "(none)"))
+	code = (project or "").replace("P-", "", 1)
+	if not code or not frappe.db.exists("Realty Project", code):
+		frappe.throw(_("Project {0} not found.").format(project))
+	unit = unit or None
+	if unit and not frappe.db.exists("Realty Unit", unit):
+		unit = None
+	booking = booking or None
+	if booking and not frappe.db.exists("Realty Booking", booking):
+		booking = None
+	try:
+		doc = frappe.get_doc({
+			"doctype": "Realty Document",
+			"document_id": _next_id("Realty Document", "document_id", "DOC-", 4),
+			"title": (title or up.filename or "Untitled").strip(),
+			"category": category if category in DOC_CATEGORIES else "Other",
+			"status": "Active", "project": code, "unit": unit,
+			"lead": _resolve_lead(lead), "booking": booking, "tags_text": _norm_tags(tags),
+			"shareable": 1 if str(shareable) in ("1", "true", "True") else 0,
+			"uploaded_by": _actor_owner(), "uploaded_on": frappe.utils.now(), "notes": notes,
+		}).insert(ignore_permissions=True)
+		# save_file dedups identical content by hash but always inserts a File row anchored to
+		# THIS doc (attached_to_name), so deletes stay independent across documents.
+		_file = save_file(up.filename, content, "Realty Document", doc.name, is_private=1)
+		doc.db_set({
+			"file_doc": _file.name, "file_url": _file.file_url, "file_name": _file.file_name,
+			"file_size": _file.file_size, "content_hash": _file.content_hash,
+			"mime_type": mimetypes.guess_type(up.filename)[0],
+		}, update_modified=False)
+		frappe.db.commit()
+	except frappe.DuplicateEntryError:
+		frappe.db.rollback()
+		frappe.throw(_("Please retry — a concurrent upload used the same ID."))
+	except Exception:
+		frappe.db.rollback()
+		raise
+	return {"ok": True, "document_id": doc.document_id}
+
+
+@frappe.whitelist()
+def update_document(document, title=None, category=None, tags=None, shareable=None, status=None):
+	"""Uploader or manager edits metadata. Turning shareable 1->0 is a HARD REVOKE of all live
+	shares and is manager-gated. (Single-shared-login caveat: the uploader gate effectively
+	passes for the one persona — see CLAUDE.md; role gates stay real.)"""
+	_guard()
+	doc = frappe.get_doc("Realty Document", document)
+	is_mgr = _is_manager()
+	if not is_mgr and doc.uploaded_by != _actor_owner():
+		frappe.throw(_("You can only edit documents you uploaded."), frappe.PermissionError)
+	if shareable is not None:
+		new_share = 1 if str(shareable) in ("1", "true", "True") else 0
+		if doc.shareable and not new_share:
+			if not is_mgr:
+				frappe.throw(_("Only a manager can un-share a document with live shares."), frappe.PermissionError)
+			_close_active_shares(document, "Revoked", "Document marked not shareable")
+		doc.shareable = new_share
+	if title is not None:
+		doc.title = title.strip()
+	if category in DOC_CATEGORIES:
+		doc.category = category
+	if tags is not None:
+		doc.tags_text = _norm_tags(tags)
+	if status in ("Active", "Archived"):
+		doc.status = status
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "document_id": doc.document_id}
+
+
+@frappe.whitelist()
+def delete_document(document):
+	"""Manager-only (mirrors delete_project). Revokes live shares, deletes the File, then the row."""
+	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can delete a document."), frappe.PermissionError)
+	doc = frappe.get_doc("Realty Document", document)
+	# share rows Link to the document → must be removed before the document is deleted
+	for s in frappe.get_all("Realty Document Share", filters={"document": document}, pluck="name"):
+		frappe.delete_doc("Realty Document Share", s, force=1, ignore_permissions=True)
+	if doc.file_doc and frappe.db.exists("File", doc.file_doc):
+		frappe.delete_doc("File", doc.file_doc, force=1, ignore_permissions=True)
+	frappe.delete_doc("Realty Document", document, force=1, ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "deleted": document}
+
+
+@frappe.whitelist()
+def download_document(document):
+	"""Desk-authenticated internal download. Re-checks read permission, then streams the private
+	bytes via get_file — so the client never holds a raw /private/files URL. INTERNAL policy: any
+	user with read on Realty Document may download; shareable/approval/revoke govern only the
+	EXTERNAL guest link (the brief's actual security requirement)."""
+	_guard()
+	doc = frappe.get_doc("Realty Document", document)
+	if not frappe.has_permission("Realty Document", "read", doc):
+		frappe.throw(_("Not permitted to download this document."), frappe.PermissionError)
+	if not doc.file_doc:
+		frappe.throw(_("This document has no file."))
+	from frappe.utils.file_manager import get_file
+	import os
+	_fname, content = get_file(doc.file_url)
+	if isinstance(content, str):
+		content = content.encode("utf-8")
+	ext = os.path.splitext(doc.file_name or "")[1] or ""
+	frappe.local.response.filename = (frappe.scrub(doc.title) or "document") + ext
+	frappe.local.response.filecontent = content
+	frappe.local.response.type = "download"
+
+
+@frappe.whitelist()
+def request_share(document, lead, note=None, channel="Link"):
+	"""Any CRM user requests to share a SHAREABLE document WITH A LEAD. Always pending (mirrors
+	request_hold). Blocks a second live (Requested OR Approved) share for the same (document, lead)."""
+	_guard()
+	# serialize on the document row (covers request vs un-share) + confirm a real file exists
+	frappe.db.get_value("Realty Document", document, "document_id", for_update=True)
+	doc = frappe.get_doc("Realty Document", document)
+	if not doc.shareable:
+		frappe.throw(_("Mark this document shareable before requesting a share."))
+	if not doc.file_doc:
+		frappe.throw(_("This document has no file to share."))
+	lead = _resolve_lead(lead)
+	if not lead:
+		frappe.throw(_("Pick a lead to share with."))
+	if frappe.db.exists("Realty Document Share",
+			{"document": document, "lead": lead, "status": ["in", ["Requested", "Approved"]]}):
+		frappe.throw(_("This document already has a live or pending share for this lead."))
+	share = frappe.get_doc({
+		"doctype": "Realty Document Share",
+		"share_id": _next_id("Realty Document Share", "share_id", "SHR-", 4),
+		"document": document, "document_title": doc.title,
+		"lead": lead, "lead_name": frappe.db.get_value("Realty Lead", lead, "lead_name"),
+		"status": "Requested", "channel": (channel if channel in ("Link", "Comms") else "Link"),
+		"requested_by": _resolve_owner(_actor_owner()), "requested_on": frappe.utils.now(),
+		"note": note,
+	}).insert(ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "share_id": share.share_id, "status": "Requested"}
+
+
+@frappe.whitelist()
+def approve_share(share_id, expires_in_days=None):
+	"""MANAGER ONLY. Mints the unguessable share_key (idempotent — a re-entrant approve never
+	replaces a live token) and activates the public link. Locks the SHARE row first."""
+	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can approve a share."), frappe.PermissionError)
+	share = _get_share(share_id)
+	frappe.db.get_value("Realty Document Share", share.name, "status", for_update=True)
+	share.reload()
+	if share.status != "Requested":
+		frappe.throw(_("This request is no longer pending."))
+	if not frappe.db.get_value("Realty Document", share.document, "shareable"):
+		frappe.throw(_("Document is no longer shareable."))
+	share.status = "Approved"
+	share.approved_by = _actor_owner()
+	share.approved_on = frappe.utils.now()
+	if not share.share_key:
+		share.share_key = frappe.generate_hash(length=48)
+	if frappe.utils.cint(expires_in_days) > 0:
+		share.expires_on = frappe.utils.add_days(frappe.utils.now_datetime(), frappe.utils.cint(expires_in_days))
+	share.save(ignore_permissions=True)
+	frappe.db.commit()
+	link = _share_url(share.share_key)
+	comms_failed = False
+	if share.channel == "Comms":  # after commit — comms failure never rolls back the approval
+		try:
+			_log_share_comm(share, link)
+			frappe.db.commit()
+		except Exception:
+			frappe.db.rollback()
+			comms_failed = True
+			frappe.log_error(frappe.get_traceback(), "approve_share comms")
+	return {"ok": True, "share_id": share.share_id, "status": "Approved",
+		"link": link, "commsFailed": comms_failed}
+
+
+@frappe.whitelist()
+def reject_share(share_id, reason=None):
+	"""Manager OR the requester (cancel own). Locks the share row."""
+	_guard()
+	share = _get_share(share_id)
+	frappe.db.get_value("Realty Document Share", share.name, "status", for_update=True)
+	share.reload()
+	actor = _actor_owner()
+	if not (_is_manager() or actor == share.requested_by):
+		frappe.throw(_("You can't decline this request."), frappe.PermissionError)
+	if share.status != "Requested":
+		frappe.throw(_("This request is no longer pending."))
+	share.status = "Rejected"
+	share.closed_by = actor
+	share.closed_on = frappe.utils.now()
+	share.close_reason = reason or ("Cancelled" if actor == share.requested_by else "Rejected")
+	share.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "share_id": share.share_id, "status": "Rejected"}
+
+
+@frappe.whitelist()
+def revoke_share(share_id, reason=None):
+	"""MANAGER ONLY (analog of release_hold). Approved -> Revoked; the link 403s on the next hit.
+	Locks the share row so a concurrent approve/view can't interleave."""
+	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can revoke a share."), frappe.PermissionError)
+	share = _get_share(share_id)
+	frappe.db.get_value("Realty Document Share", share.name, "status", for_update=True)
+	share.reload()
+	if share.status != "Approved":
+		frappe.throw(_("Only an approved share can be revoked."))
+	share.status = "Revoked"
+	share.closed_by = _actor_owner()
+	share.closed_on = frappe.utils.now()
+	share.close_reason = reason or "Revoked"
+	share.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "share_id": share.share_id, "status": "Revoked"}
+
+
+@frappe.whitelist()
+def get_document_shares(document):
+	"""Full share history for one document (audit trail), newest first — powers 'who it was shared
+	with'. Mirrors get_unit_holds. The share link is exposed only to a manager or the requester."""
+	_guard()
+	is_mgr = _is_manager()
+	me = _actor_owner()
+	now = frappe.utils.now_datetime()
+	out = []
+	for r in frappe.get_all("Realty Document Share", filters={"document": document},
+			fields=["share_id", "lead", "lead_name", "status", "channel", "requested_by",
+				"requested_on", "approved_by", "approved_on", "access_count", "last_accessed_on",
+				"last_accessed_ip", "expires_on", "closed_by", "closed_on", "close_reason", "share_key"],
+			order_by="creation desc"):
+		eff = _effective_share_status(r.status, r.expires_on, now)
+		live_lead = frappe.db.get_value("Realty Lead", r.lead, "lead_name") or r.lead_name
+		expose = eff == "Approved" and r.share_key and (is_mgr or me == r.requested_by)
+		out.append({"id": r.share_id, "lead": r.lead, "leadName": live_lead, "status": eff,
+			"channel": r.channel, "requestedBy": r.requested_by, "requestedOn": _s(r.requested_on),
+			"approvedBy": r.approved_by, "approvedOn": _s(r.approved_on), "accessCount": r.access_count,
+			"lastAccessedOn": _s(r.last_accessed_on), "expiresOn": _s(r.expires_on),
+			"closedBy": r.closed_by, "closedOn": _s(r.closed_on), "closeReason": r.close_reason,
+			"shareUrl": (_share_url(r.share_key) if expose else None)})
+	return out
+
+
+@frappe.whitelist(allow_guest=True)
+@rate_limit(limit=30, seconds=60)
+def view_shared_document(key=None):
+	"""Public, key-validated download. Streams the underlying PRIVATE Frappe File ONLY when the
+	share is Approved, unexpired, and the document is still shareable. Never exposes /private/files;
+	denial is byte-identical (no enumeration oracle). Rate-limited per IP."""
+	key = (key or "").strip()
+	name = frappe.db.get_value("Realty Document Share", {"share_key": key}, "name") if key else None
+	if not name:
+		frappe.throw(_("This link is invalid or no longer available."), frappe.PermissionError)
+	share = frappe.get_doc("Realty Document Share", name)
+	now = frappe.utils.now_datetime()  # REAL clock, not the pinned demo date
+	if share.status == "Approved" and share.expires_on and now > frappe.utils.get_datetime(share.expires_on):
+		try:
+			share.db_set({"status": "Expired", "closed_on": frappe.utils.now(), "close_reason": "Expired"},
+				update_modified=False)
+			frappe.db.commit()
+		except Exception:
+			frappe.db.rollback()
+		share.reload()
+	if share.status != "Approved":
+		frappe.throw(_("This link is invalid or no longer available."), frappe.PermissionError)
+	doc = frappe.get_doc("Realty Document", share.document)
+	if not doc.shareable or not doc.file_doc:
+		frappe.throw(_("This link is invalid or no longer available."), frappe.PermissionError)
+	from frappe.utils.file_manager import get_file
+	import os
+	_fname, content = get_file(doc.file_url)
+	if isinstance(content, str):
+		content = content.encode("utf-8")
+	try:
+		share.db_set({"access_count": (share.access_count or 0) + 1,
+			"last_accessed_on": frappe.utils.now(), "last_accessed_ip": frappe.local.request_ip},
+			update_modified=False)
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback()
+	ext = os.path.splitext(doc.file_name or "")[1] or ""
+	frappe.local.response.filename = (frappe.scrub(doc.title) or "document") + ext
+	frappe.local.response.filecontent = content
+	frappe.local.response.type = "download"
+
+
+# --------------------------------------------------------------------------- #
 # admin / settings (manager-gated)
 # --------------------------------------------------------------------------- #
 # Roles a manager may assign to a new login — never System Manager (no escalation).
@@ -818,6 +1289,15 @@ def delete_project(code):
 	nleads = frappe.db.count("Realty Lead", {"project": code})
 	if nleads:
 		frappe.throw(_("Can't delete {0}: {1} lead(s) reference it — reassign them first.").format(pname, nleads))
+	# documents (+ their shares + Files) — must precede unit/project deletes (link integrity:
+	# Realty Document.project/.unit Link to the project/units being removed)
+	for d in frappe.get_all("Realty Document", filters={"project": code}, pluck="name"):
+		for s in frappe.get_all("Realty Document Share", filters={"document": d}, pluck="name"):
+			frappe.delete_doc("Realty Document Share", s, force=1, ignore_permissions=True)
+		fd = frappe.db.get_value("Realty Document", d, "file_doc")
+		if fd and frappe.db.exists("File", fd):
+			frappe.delete_doc("File", fd, force=1, ignore_permissions=True)
+		frappe.delete_doc("Realty Document", d, force=1, ignore_permissions=True)
 	# safe to cascade: units (+ their holds), site visits, then the project
 	units = frappe.get_all("Realty Unit", filters={"project": code}, pluck="name")
 	for uid in units:
