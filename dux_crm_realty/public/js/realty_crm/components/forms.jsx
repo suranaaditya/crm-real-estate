@@ -503,6 +503,77 @@ window.AddUnitsModal = function AddUnitsModal({ open, onClose, project, onSaved 
 };
 const drawerEyebrow = { fontFamily: "var(--font-display)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", fontSize: 10, color: "var(--neutral-400)" };
 
+// ---------- Email account modal (Settings → Email) ----------
+window.EmailAccountModal = function EmailAccountModal({ open, onClose, account, onSaved }) {
+  const init = () => ({ email: "", senderName: "", smtpHost: "smtp.gmail.com", smtpPort: 465,
+    useSsl: true, password: "", isDefault: true, enabled: true });
+  const [form, setForm] = useStateF(init);
+  const [busy, setBusy] = useStateF(false);
+  const [adv, setAdv] = useStateF(false);
+  useEffectF(() => {
+    if (open) {
+      if (account) setForm({ id: account.id, email: account.email || "", senderName: account.senderName || "",
+        smtpHost: account.smtpHost || "smtp.gmail.com", smtpPort: account.smtpPort || 465,
+        useSsl: account.useSsl !== false, password: "", isDefault: !!account.isDefault, enabled: account.enabled !== false });
+      else setForm(init());
+      setBusy(false); setAdv(false);
+    }
+  }, [open, account]);
+  const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  if (!open) return null;
+  const save = async () => {
+    if (!form.email.trim() || !form.email.includes("@")) { frappe.msgprint("Enter a valid email address."); return; }
+    if (!account && !form.password) { frappe.msgprint("Enter the app password for this account."); return; }
+    setBusy(true);
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.save_email_account", args: { payload: form } });
+      frappe.show_alert({ message: "Email account saved", indicator: "green" });
+      onSaved && await onSaved(); onClose();
+    } catch (e) { frappe.msgprint(e.message || "Could not save email account"); setBusy(false); }
+  };
+  const Check = ({ on, onClick, label }) => (
+    <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+      <button onClick={(e) => { e.preventDefault(); onClick(); }} style={{
+        width: 18, height: 18, borderRadius: 5, cursor: "pointer", flexShrink: 0,
+        border: "1.5px solid " + (on ? "var(--dux-navy)" : "var(--neutral-300)"),
+        background: on ? "var(--dux-navy)" : "transparent", color: "#fff",
+        display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{on && <Icon name="check" size={12} />}</button>
+      <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+    </label>
+  );
+  return (
+    <Modal open={open} onClose={onClose} eyebrow="EMAIL ACCOUNT" title={account ? "Edit email account" : "Add a sending email"}
+      subtitle="Emails to leads are sent from this address (SMTP). For Gmail, use an App Password." width={600}
+      footer={<>
+        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Saving…" : "Save"}</Btn>
+      </>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Email address" required><Input type="email" autoFocus placeholder="you@gmail.com" value={form.email} onChange={(e) => u("email", e.target.value)} /></Field>
+        <Field label="Sender name" hint="Shown as the From name"><Input placeholder="e.g. Priya · Shradha Realty" value={form.senderName} onChange={(e) => u("senderName", e.target.value)} /></Field>
+        <Field label={account ? "App password (leave blank to keep)" : "App password"} required={!account} span={2}
+          hint="Gmail: myaccount.google.com → Security → App passwords (needs 2-Step Verification). Paste the 16-character code.">
+          <Input type="password" autoComplete="new-password" placeholder={account ? "•••••••••••• (unchanged)" : "16-character app password"} value={form.password} onChange={(e) => u("password", e.target.value)} />
+        </Field>
+        <div style={{ gridColumn: "span 2", display: "flex", flexDirection: "column", gap: 12, padding: 14, border: "1px solid var(--hairline)", borderRadius: 10, background: "var(--neutral-50)" }}>
+          <Check on={form.isDefault} onClick={() => u("isDefault", !form.isDefault)} label="Use this as my default sending address" />
+          <Check on={form.enabled} onClick={() => u("enabled", !form.enabled)} label="Enabled" />
+        </div>
+        <div style={{ gridColumn: "span 2" }}>
+          <button onClick={() => setAdv(a => !a)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--dux-navy)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Icon name="chevronD" size={13} /> {adv ? "Hide" : "Advanced"} SMTP settings
+          </button>
+        </div>
+        {adv && <>
+          <Field label="SMTP host"><Input value={form.smtpHost} onChange={(e) => u("smtpHost", e.target.value)} /></Field>
+          <Field label="SMTP port"><Input type="number" value={form.smtpPort} onChange={(e) => u("smtpPort", e.target.value)} /></Field>
+          <div style={{ gridColumn: "span 2" }}><Check on={form.useSsl} onClick={() => u("useSsl", !form.useSsl)} label="Use SSL (port 465). Uncheck for STARTTLS (port 587)." /></div>
+        </>}
+      </div>
+    </Modal>
+  );
+};
+
 // ---------- Reusable lead picker (project filter + search) ----------
 window.LeadPicker = function LeadPicker({ value, onChange, defaultProject }) {
   const data = window.CRM_DATA;

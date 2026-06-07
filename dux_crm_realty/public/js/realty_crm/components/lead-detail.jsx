@@ -21,6 +21,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
   const [activities, setActivities] = ldUseState(lead ? (lead.activities || []) : []);
   const [actModal, setActModal] = ldUseState(null);   // {type, label} | null
   const [visitOpen, setVisitOpen] = ldUseState(false);
+  const [emailOpen, setEmailOpen] = ldUseState(false);
   if (!lead) return null;
   const data = window.CRM_DATA;
   const project = data.projects.find(p => p.id === lead.project);
@@ -90,6 +91,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
             <StageBadge stage={stage} size="lg" />
             <Btn variant="accent" size="sm" icon="phone" onClick={() => setActModal({ type: "call", label: "Log a call" })}>Log call</Btn>
             <Btn variant="outline" size="sm" icon="whatsapp" onClick={() => setActModal({ type: "whatsapp", label: "Log a WhatsApp message" })}>WhatsApp</Btn>
+            <Btn variant="outline" size="sm" icon="mail" onClick={() => setEmailOpen(true)}>Email</Btn>
             <Btn variant="outline" size="sm" icon="calendar" onClick={() => setVisitOpen(true)}>Schedule visit</Btn>
           </div>
 
@@ -156,6 +158,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
 
     <LogActivityModal modal={actModal} onClose={() => setActModal(null)} lead={lead} onLogged={onLogged} />
     <ScheduleVisitModal open={visitOpen} onClose={() => setVisitOpen(false)} lead={lead} onLogged={onLogged} />
+    <EmailComposerModal open={emailOpen} onClose={() => setEmailOpen(false)} lead={lead} onLogged={onLogged} />
    </>
   );
 };
@@ -271,6 +274,145 @@ function ScheduleVisitModal({ open, onClose, lead, onLogged }) {
           <Textarea placeholder="Pickup, model flat, documents to carry…" rows={3} value={form.notes} onChange={(e) => u("notes", e.target.value)} />
         </Field>
       </div>
+    </LeadModal>
+  );
+}
+
+// ---------- AI email composer (draft with Gemma, attach docs, send) ----------
+function EmailComposerModal({ open, onClose, lead, onLogged }) {
+  const data = window.CRM_DATA;
+  const kinds = data.emailKinds || ["Greeting", "Follow-up", "Custom"];
+  const accounts = (data.emailAccounts || []).filter(a => a.enabled && a.hasPassword);
+  const def = data.defaultEmailAccount;
+  const [to, setTo] = ldUseState("");
+  const [account, setAccount] = ldUseState("");
+  const [kind, setKind] = ldUseState(kinds[0] || "Greeting");
+  const [instruction, setInstruction] = ldUseState("");
+  const [subject, setSubject] = ldUseState("");
+  const [body, setBody] = ldUseState("");
+  const [attach, setAttach] = ldUseState([]);          // document_ids
+  const [busy, setBusy] = ldUseState("");              // "draft" | "improve" | "send" | ""
+  React.useEffect(() => {
+    if (open) {
+      setTo(lead.email || ""); setAccount((def && def.id) || (accounts[0] && accounts[0].id) || "");
+      setKind(kinds[0] || "Greeting"); setInstruction(""); setSubject(""); setBody(""); setAttach([]); setBusy("");
+    }
+  }, [open]);
+  if (!open) return null;
+
+  // attachable docs = the lead's docs + this project's docs (deduped)
+  const freshLead = (data.leads || []).find(l => l.id === lead.id) || lead;
+  const seen = {};
+  const docs = [...(freshLead.documents || []), ...((data.documentsByProject || {})[lead.project] || [])]
+    .filter(d => { if (seen[d.id]) return false; seen[d.id] = 1; return true; });
+  const toggleAttach = (id) => setAttach(a => a.includes(id) ? a.filter(x => x !== id) : [...a, id]);
+  const noAccount = accounts.length === 0;
+
+  const draft = async () => {
+    setBusy("draft");
+    try {
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.draft_email", args: { lead: lead.id, instruction, kind } });
+      setSubject(r.message.subject || ""); setBody(r.message.body || "");
+    } catch (e) { frappe.msgprint(e.message || "Could not draft the email"); }
+    setBusy("");
+  };
+  const improve = async () => {
+    if (!body.trim()) return;
+    setBusy("improve");
+    try {
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.improve_text", args: { text: body } });
+      setBody(r.message.text || body);
+    } catch (e) { frappe.msgprint(e.message || "Could not improve the text"); }
+    setBusy("");
+  };
+  const send = async () => {
+    if (!to.trim()) { frappe.msgprint("Enter a recipient email address."); return; }
+    if (!subject.trim() && !body.trim()) { frappe.msgprint("Draft or write the email first."); return; }
+    setBusy("send");
+    try {
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.send_email", args: { payload: {
+        lead: lead.id, to: to.trim(), subject: subject.trim(), body, account, attachments: attach } } });
+      frappe.show_alert({ message: "Email sent to " + r.message.to, indicator: "green" });
+      if (r.message && r.message.activities) onLogged(r.message.activities);
+      onClose();
+    } catch (e) { frappe.msgprint(e.message || "Could not send the email"); setBusy(""); }
+  };
+
+  return (
+    <LeadModal open={open} onClose={onClose} eyebrow="EMAIL · AI DRAFT" title={"Email " + lead.name}
+      subtitle={lead.id + (lead.projectName ? " · " + lead.projectName : "")} width={680}
+      footer={<>
+        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="mail" onClick={send}
+          style={{ opacity: (busy || noAccount) ? 0.6 : 1, pointerEvents: busy ? "none" : "auto" }}>
+          {busy === "send" ? "Sending…" : "Send email"}
+        </Btn>
+      </>}>
+      {noAccount && (
+        <div style={{ marginBottom: 14, padding: "10px 12px", borderRadius: 8, background: "var(--dux-amber-100)", color: "var(--dux-amber-600)", fontSize: 12, fontWeight: 600, display: "flex", gap: 8, alignItems: "center" }}>
+          <Icon name="mail" size={14} /> No sending email is set up yet — add yours in Settings → Email. You can still draft below.
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <Field label="To" required><Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="lead@email.com" /></Field>
+        <Field label="From">
+          {accounts.length ? (
+            <Select value={account} onChange={(e) => setAccount(e.target.value)}>
+              {accounts.map(a => <option key={a.id} value={a.id}>{a.senderName ? a.senderName + " · " : ""}{a.email}{a.isDefault ? " (default)" : ""}</option>)}
+            </Select>
+          ) : <Input value="— none configured —" readOnly style={{ background: "var(--neutral-50)", color: "var(--neutral-400)" }} />}
+        </Field>
+        <Field label="Email type" span={2}>
+          <Select value={kind} onChange={(e) => setKind(e.target.value)}>{kinds.map(k => <option key={k}>{k}</option>)}</Select>
+        </Field>
+        <Field label="Tell the AI what to write" span={2} hint="It already knows the lead, project, configuration & budget — just add the gist">
+          <Textarea rows={2} value={instruction} placeholder="e.g. Invite them for a Saturday site visit and attach the cost sheet" onChange={(e) => setInstruction(e.target.value)} />
+        </Field>
+      </div>
+      <div style={{ margin: "12px 0 16px" }}>
+        <Btn variant="primary" size="sm" icon="flame" onClick={draft} style={{ opacity: busy ? 0.6 : 1, pointerEvents: busy ? "none" : "auto" }}>
+          {busy === "draft" ? "Drafting with AI…" : (subject || body ? "Re-draft with AI" : "Draft with AI")}
+        </Btn>
+      </div>
+
+      <Field label="Subject"><Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject line" /></Field>
+      <div style={{ height: 12 }} />
+      <Field label="Body">
+        <Textarea rows={10} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write the email, or let the AI draft it above…" />
+      </Field>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+        <button onClick={improve} disabled={!!busy || !body.trim()} style={{
+          border: 0, background: "transparent", cursor: body.trim() ? "pointer" : "default",
+          fontSize: 12, fontWeight: 600, color: body.trim() ? "var(--dux-navy)" : "var(--neutral-300)",
+          display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <Icon name="check" size={13} /> {busy === "improve" ? "Polishing…" : "Fix English / polish"}
+        </button>
+      </div>
+
+      {docs.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div className="dux-eyebrow" style={{ fontSize: 10, marginBottom: 8 }}>Attach documents · {attach.length} selected</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" }}>
+            {docs.map(d => {
+              const on = attach.includes(d.id);
+              return (
+                <button key={d.id} onClick={() => toggleAttach(d.id)} style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "9px 11px", textAlign: "left",
+                  border: "1px solid " + (on ? "var(--dux-amber)" : "var(--hairline)"), borderRadius: 9,
+                  background: on ? "var(--dux-amber-100)" : "var(--bg)", cursor: "pointer" }}>
+                  <span style={{ width: 18, height: 18, borderRadius: 5, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    border: "1.5px solid " + (on ? "var(--dux-amber-600)" : "var(--neutral-300)"), background: on ? "var(--dux-amber-600)" : "transparent", color: "#fff" }}>
+                    {on && <Icon name="check" size={11} />}
+                  </span>
+                  <Icon name="file" size={15} style={{ color: "var(--neutral-500)" }} />
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</span>
+                  <span style={{ fontSize: 10, color: "var(--neutral-400)" }}>{d.category} · {fmtBytes(d.size)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </LeadModal>
   );
 }

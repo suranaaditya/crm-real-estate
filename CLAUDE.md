@@ -126,6 +126,12 @@ doctypes, so it won't apply field/option changes to a live site).
   **unique**, minted ONLY on manager approval via `frappe.generate_hash(length=48)`), `expires_on`,
   `access_count`/`last_accessed_*` (audit), `requested_by`/`approved_by`/`closed_*`. `allow_rename=0` on
   both (audit identity is immutable — `make_doctype` now takes an `allow_rename` param).
+- **Realty Email Account** — a per-user (or shared, if `owner_user` blank) SMTP sending account for the
+  AI email feature. `email_id`, `sender_name`, `smtp_host`/`smtp_port`/`use_ssl` (Gmail defaults),
+  `smtp_password` (**Password fieldtype → encrypted in `__Auth`**; read with `doc.get_password(...)`),
+  `is_default`, `enabled`, `has_password` (read-only flag set on save so bootstrap needn't decrypt).
+  Sending uses **smtplib directly** — it never touches Frappe's site-wide Email Account / default
+  outgoing, so it can't disturb other apps on the shared box.
 
 ## Key API (all in `api/crm.py`, whitelisted)
 
@@ -168,6 +174,18 @@ doctypes, so it won't apply field/option changes to a live site).
   + still shareable; denial is byte-identical 403; lazy-expires; bumps `access_count`). `get_bootstrap`
   adds `documents` (+ per-lead `documents` and `documentsByProject`), `pendingShares`, `activeShares`,
   `docTags`, `docCategories`; `documents[].shares` carries each doc's active shares.
+- **AI email (Ollama / Gemma) + sending** (`api/crm.py`): `draft_email(lead, instruction, kind)` builds a
+  context prompt (lead name, project + locality/city, configuration, budget, email type, the rep's free
+  instruction) and calls the local **Gemma `gemma4:e4b`** box via `_ollama_generate` (recipe from the
+  `dux_aichatbot` repo: `think:false`, `format:"json"`, `keep_alive:"15m"`); returns `{subject, body}`.
+  `improve_text(text)` does English/grammar polish. Email-account CRUD: `save_email_account` /
+  `set_default_email_account` / `delete_email_account` / `test_email_account` (SMTP connect check). And
+  `send_email(payload)` — sends from the user's account via **smtplib** with selected Realty Documents
+  attached (read via `get_file`), then logs a Communication + a lead activity. `get_bootstrap` exposes
+  `emailAccounts` (no passwords), `defaultEmailAccount`, `emailKinds`.
+  **LLM endpoint:** `frappe.conf.get("ollama_url")` (set in `site_config.json` →
+  `http://187.127.174.89:11434/api/generate`; reachable only from the dev box `187.127.132.58` via a UFW
+  rule). Full LLM box docs live in the sibling `dux_aichatbot` repo (`LLM_INFERENCE_SERVER.md`).
 
 ---
 
@@ -219,6 +237,16 @@ doctypes, so it won't apply field/option changes to a live site).
   (forms.jsx), `downloadDocument`/`copyShareLink`/`fmtBytes`/`ShareHistoryModal` (lead-detail.jsx).
 - **`uploaded_on` shows as "in N d"** in the demo because file timestamps are the REAL clock while the app's
   pinned "today" is 2026-04-29 (`fmtRelative` is relative to the pin). Cosmetic; consistent with the pin.
+- **AI email = local Gemma, not a cloud LLM.** `draft_email`/`improve_text` POST to the Ollama box
+  (`ollama_url` in site_config). Calls take ~2–25s (warm) and can cold-load ~12s — the composer shows a
+  "Drafting…" state; don't lower the `requests` timeout (120s) below that. Output is reviewed/edited by the
+  human before send (never auto-sent). `gemma4:e4b` needs `think:false` or it burns its token budget reasoning.
+- **Email credentials are the user's to enter.** The SMTP **App Password** is typed by the user in
+  Settings → Email (never by an agent). Gmail needs an App Password (2-Step Verification on). Sending is
+  smtplib-direct and self-contained — verify drafting/compose/settings, but the first real send is the user's.
+- **Python `_` gotcha (bit us once):** never use bare `_` as a throwaway (`a, _, b = x.partition(...)`) in a
+  function that also calls `_()` (gettext) — it makes `_` a function-local and every `_("...")` then raises
+  `UnboundLocalError`. Use `_sep`/`_x`. (List-comprehension `for _ in ...` is safe — own scope.)
 - **Hold attribution identity is a known, documented limitation.** Actor identity comes from
   `_actor_owner()` (maps `frappe.session.user` → the `Realty Sales Owner.user` link, else falls back to
   the pinned persona). With ONE shared login (and reps not yet having Frappe Users) every actor
@@ -264,6 +292,17 @@ Each document can be **edited** — rename (the title is the display + downloade
 category/tags, **toggle shareable** (1→0 hard-revokes live shares, manager-only), or **delete** (manager) —
 via an `EditDocumentModal` (pencil button on each card / drawer row); non-shareable docs also get a
 one-click **Make shareable**. Backed by `update_document` / `delete_document`.
+
+**AI email assistant** (added, verified live — AI part end-to-end; live send is the user's to trigger):
+integrates the sibling `dux_aichatbot`'s local **Gemma (`gemma4:e4b` on Ollama)** box. A new **Email**
+section in Settings lets anyone add their own Gmail/SMTP sending address (App Password stored encrypted;
+smtplib-direct, isolated from the shared site's email). The lead drawer gains an **Email** action (beside
+Log call / WhatsApp / Schedule visit) opening an AI composer: pick an email type, tell the AI the gist,
+and it drafts a polished subject+body **grounded in the lead's apartment/project/budget context**; a "Fix
+English / polish" button cleans up grammar; documents (the lead's + the project's) can be attached; Send
+goes out over SMTP and logs to the lead's Activity timeline. Verified live: `draft_email` (context-aware),
+`improve_text`, the settings + composer UIs, attachment selection, and clean error paths (no-account,
+SMTP-failure). Real outbound send needs the user's own App Password (agents never enter credentials).
 A new **Approvals** sidebar page (manager-only, live pending badge = holds + shares) is the **unified
 inbox**: pending inventory hold/reserve requests AND document-share requests in one place (tabs All /
 Inventory holds / Document shares), with an Active section to **release** holds and **revoke** shares /

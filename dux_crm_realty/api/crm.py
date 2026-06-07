@@ -394,6 +394,8 @@ def get_bootstrap():
 		"documents": documents, "documentsByProject": docs_by_project,
 		"pendingShares": pending_shares, "activeShares": active_shares,
 		"docTags": sorted(doc_tags), "docCategories": list(DOC_CATEGORIES),
+		"emailAccounts": _visible_email_accounts(), "defaultEmailAccount": _default_email_account(),
+		"emailKinds": list(EMAIL_KINDS),
 		"inventory": {"P-AN": {"towers": an_towers, "units": floor7b}},
 		"abhimanGrid": grid, "grids": grids, "pendingHolds": pending_holds,
 		"visits": visits, "bookings": bookings,
@@ -1215,6 +1217,378 @@ def view_shared_document(key=None):
 	frappe.local.response.filename = (frappe.scrub(doc.title) or "document") + ext
 	frappe.local.response.filecontent = content
 	frappe.local.response.type = "download"
+
+
+# --------------------------------------------------------------------------- #
+# AI email drafting (Ollama / Gemma) + email accounts + sending
+# --------------------------------------------------------------------------- #
+OLLAMA_TIMEOUT = 120
+EMAIL_KINDS = ("Greeting", "Follow-up", "Site visit invite", "Cost sheet / pricing",
+	"Share documents", "Thank you", "Custom")
+
+
+def _ollama_url():
+	# read from site_config (the dux_chatbot convention); fall back to the known LLM box
+	return frappe.conf.get("ollama_url") or "http://187.127.174.89:11434/api/generate"
+
+
+def _ollama_generate(prompt, num_predict=800, temperature=0.4, fmt="json"):
+	"""Single-shot call to the Gemma/Ollama box (recipe from dux_aichatbot: think=false to
+	avoid the model burning its budget reasoning; format=json for parseable output)."""
+	import requests
+	payload = {"model": "gemma4:e4b", "prompt": prompt, "stream": False, "think": False,
+		"keep_alive": "15m", "options": {"num_predict": num_predict, "temperature": temperature}}
+	if fmt:
+		payload["format"] = fmt
+	try:
+		r = requests.post(_ollama_url(), json=payload, timeout=OLLAMA_TIMEOUT)
+		r.raise_for_status()
+		return (r.json() or {}).get("response", "") or ""
+	except Exception as e:
+		frappe.throw(_("The AI service is unavailable right now — please try again. ({0})").format(str(e)[:140]))
+
+
+def _lead_email_context(ld):
+	"""Compact, factual context block the model uses to ground the email."""
+	proj = frappe.db.get_value("Realty Project", ld.project,
+		["project_name", "locality", "city", "possession", "typology"], as_dict=True) if ld.project else None
+	budget = ("about " + frappe.utils.fmt_money(ld.budget)) if ld.budget else "not specified"
+	lines = [f"Lead name: {ld.lead_name}"]
+	if ld.interest:
+		lines.append(f"Looking for: {ld.interest}")
+	if proj:
+		where = ", ".join([x for x in [proj.get("locality"), proj.get("city")] if x])
+		lines.append(f"Project of interest: {proj.get('project_name')}{(' (' + where + ')') if where else ''}")
+		if proj.get("possession"):
+			lines.append(f"Possession: {proj.get('possession')}")
+	lines.append(f"Budget: {budget}")
+	return "\n".join(lines)
+
+
+@frappe.whitelist()
+def draft_email(lead, instruction=None, kind="Custom"):
+	"""Draft a warm, professional sales email for a lead using the local LLM. Grounded in the
+	lead's apartment/project/budget context + the chosen email type + the rep's free instruction.
+	Returns {subject, body} — always reviewed/edited by the human before sending."""
+	_guard()
+	name = _resolve_lead(lead) or lead
+	ld = frappe.get_doc("Realty Lead", name)
+	ld.check_permission("read")
+	sender = frappe.utils.get_fullname() or "the Shradha Realty team"
+	kind = kind if kind in EMAIL_KINDS else "Custom"
+	prompt = (
+		"You are an assistant for a sales executive at Shradha Realty, a real-estate developer in Nagpur, India. "
+		"Write a warm, professional, concise email (about 120-160 words) from the sales executive to a prospective buyer (the lead). "
+		"Return ONLY JSON with exactly two keys: \"subject\" (short) and \"body\". "
+		"In the body use \\n for line breaks, address the lead by name, and end with a sign-off from the sender. "
+		"Do not invent prices, dates, or unit numbers that are not given. Be helpful and human, not pushy.\n\n"
+		f"Email type: {kind}\n"
+		f"Sender (sign off as): {sender}, Shradha Realty\n"
+		f"--- Lead context ---\n{_lead_email_context(ld)}\n"
+		f"--- What the sales executive wants to say ---\n{(instruction or '').strip() or '(no extra instruction — write a fitting ' + kind + ' email)'}\n"
+	)
+	resp = _ollama_generate(prompt, num_predict=900, temperature=0.5, fmt="json")
+	try:
+		data = frappe.parse_json(resp) or {}
+	except Exception:
+		data = {}
+	subject = (data.get("subject") or "").strip()
+	body = (data.get("body") or "").strip()
+	if not body:
+		# model returned prose / non-JSON — surface it as the body so nothing is lost
+		body = resp.strip()
+	if not subject:
+		pname = frappe.db.get_value("Realty Project", ld.project, "project_name") if ld.project else None
+		subject = ("Regarding " + pname) if pname else "Following up on your enquiry"
+	return {"subject": subject, "body": body}
+
+
+@frappe.whitelist()
+def improve_text(text):
+	"""Correct grammar/spelling and improve the English of a draft, preserving meaning + line
+	breaks. Powers the 'Fix English' button in the email composer."""
+	_guard()
+	text = (text or "").strip()
+	if not text:
+		return {"text": ""}
+	prompt = (
+		"Correct the grammar, spelling and English of the text below. Improve clarity and keep a "
+		"professional, warm tone. Preserve the meaning and any line breaks. Do not add new facts. "
+		"Return ONLY JSON with a single key \"text\" containing the corrected version. Use \\n for line breaks.\n\n"
+		f"TEXT:\n{text}"
+	)
+	resp = _ollama_generate(prompt, num_predict=900, temperature=0.2, fmt="json")
+	try:
+		data = frappe.parse_json(resp) or {}
+	except Exception:
+		data = {}
+	return {"text": (data.get("text") or text).strip()}
+
+
+# ---- email accounts (per-user SMTP sender; self-contained, smtplib only) ----
+def _visible_email_accounts():
+	"""Accounts the current login may use: their own + shared (owner blank). Managers see all."""
+	me = frappe.session.user
+	mgr = _is_manager()
+	out = []
+	for ea in frappe.get_all("Realty Email Account", fields=[
+			"account_id", "email_id", "sender_name", "owner_user", "is_default", "enabled",
+			"has_password", "smtp_host", "smtp_port", "use_ssl", "last_tested", "last_status"],
+			order_by="creation"):
+		mine = ea.owner_user == me
+		shared = not ea.owner_user
+		if not (mine or shared or mgr):
+			continue
+		out.append({
+			"id": ea.account_id, "email": ea.email_id, "senderName": ea.sender_name,
+			"mine": mine, "shared": shared, "isDefault": bool(ea.is_default),
+			"enabled": bool(ea.enabled), "hasPassword": bool(ea.has_password),
+			"smtpHost": ea.smtp_host, "smtpPort": ea.smtp_port, "useSsl": bool(ea.use_ssl),
+			"lastTested": _s(ea.last_tested), "lastStatus": ea.last_status})
+	return out
+
+
+def _default_email_account():
+	"""The sending account to use for the current user: their default, else a shared default,
+	else any enabled account they can use."""
+	accts = [a for a in _visible_email_accounts() if a["enabled"] and a["hasPassword"]]
+	if not accts:
+		return None
+	for a in accts:
+		if a["mine"] and a["isDefault"]:
+			return a
+	for a in accts:
+		if a["shared"] and a["isDefault"]:
+			return a
+	for a in accts:
+		if a["mine"]:
+			return a
+	return accts[0]
+
+
+@frappe.whitelist()
+def save_email_account(payload):
+	"""Create/update the current user's sending email account. The app password is stored
+	encrypted (Password fieldtype). Only the owner (or a manager) may edit an account."""
+	_guard()
+	if isinstance(payload, str):
+		payload = frappe.parse_json(payload)
+	email_id = (payload.get("email") or "").strip().lower()
+	if not email_id or "@" not in email_id:
+		frappe.throw(_("Enter a valid email address."))
+	acc_id = payload.get("id")
+	if acc_id and frappe.db.exists("Realty Email Account", acc_id):
+		doc = frappe.get_doc("Realty Email Account", acc_id)
+		if doc.owner_user and doc.owner_user != frappe.session.user and not _is_manager():
+			frappe.throw(_("You can only edit your own email account."), frappe.PermissionError)
+	else:
+		doc = frappe.get_doc({"doctype": "Realty Email Account",
+			"account_id": _next_id("Realty Email Account", "account_id", "EML-", 4),
+			"owner_user": frappe.session.user})
+	doc.email_id = email_id
+	doc.sender_name = (payload.get("senderName") or "").strip() or frappe.utils.get_fullname()
+	doc.smtp_host = (payload.get("smtpHost") or "smtp.gmail.com").strip()
+	doc.smtp_port = frappe.utils.cint(payload.get("smtpPort")) or 465
+	doc.use_ssl = 1 if str(payload.get("useSsl", 1)) in ("1", "true", "True") else 0
+	doc.enabled = 1 if str(payload.get("enabled", 1)) in ("1", "true", "True") else 0
+	pw = payload.get("password")
+	if pw:  # only overwrite when a new password is supplied (don't wipe on metadata edits)
+		doc.smtp_password = pw
+		doc.has_password = 1
+	doc.save(ignore_permissions=True)
+	if str(payload.get("isDefault")) in ("1", "true", "True"):
+		_set_default_account(doc.name)
+	elif payload.get("isDefault") is not None:
+		doc.db_set("is_default", 0)
+	frappe.db.commit()
+	return {"ok": True, "id": doc.account_id}
+
+
+def _set_default_account(name):
+	doc = frappe.get_doc("Realty Email Account", name)
+	# clear other defaults in the same scope (this user's, or shared)
+	scope = {"owner_user": doc.owner_user} if doc.owner_user else {"owner_user": ["is", "not set"]}
+	for other in frappe.get_all("Realty Email Account", filters={**scope, "is_default": 1}, pluck="name"):
+		if other != name:
+			frappe.db.set_value("Realty Email Account", other, "is_default", 0)
+	frappe.db.set_value("Realty Email Account", name, "is_default", 1)
+
+
+@frappe.whitelist()
+def set_default_email_account(account):
+	_guard()
+	doc = frappe.get_doc("Realty Email Account", account)
+	if doc.owner_user and doc.owner_user != frappe.session.user and not _is_manager():
+		frappe.throw(_("You can only set your own account as default."), frappe.PermissionError)
+	_set_default_account(doc.name)
+	frappe.db.commit()
+	return {"ok": True}
+
+
+@frappe.whitelist()
+def delete_email_account(account):
+	_guard()
+	doc = frappe.get_doc("Realty Email Account", account)
+	if doc.owner_user and doc.owner_user != frappe.session.user and not _is_manager():
+		frappe.throw(_("You can only delete your own email account."), frappe.PermissionError)
+	frappe.delete_doc("Realty Email Account", doc.name, force=1, ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True}
+
+
+def _smtp_connect(doc):
+	"""Open + authenticate an SMTP connection for an account. Caller must quit()."""
+	import smtplib
+	import ssl as _ssl
+	pw = doc.get_password("smtp_password", raise_exception=False)
+	if not pw:
+		frappe.throw(_("Add the app password for {0} (Settings → Email).").format(doc.email_id))
+	host = doc.smtp_host or "smtp.gmail.com"
+	port = frappe.utils.cint(doc.smtp_port) or (465 if doc.use_ssl else 587)
+	if doc.use_ssl:
+		server = smtplib.SMTP_SSL(host, port, context=_ssl.create_default_context(), timeout=30)
+	else:
+		server = smtplib.SMTP(host, port, timeout=30)
+		server.starttls(context=_ssl.create_default_context())
+	server.login(doc.email_id, pw)
+	return server
+
+
+@frappe.whitelist()
+def test_email_account(account):
+	"""Verify SMTP login works (connect + auth, no message sent). Records the result."""
+	_guard()
+	doc = frappe.get_doc("Realty Email Account", account)
+	try:
+		server = _smtp_connect(doc)
+		server.quit()
+		doc.db_set({"last_tested": frappe.utils.now(), "last_status": "OK"}, update_modified=False)
+		frappe.db.commit()
+		return {"ok": True, "status": "OK"}
+	except Exception as e:
+		msg = str(e)[:140]
+		doc.db_set({"last_tested": frappe.utils.now(), "last_status": "Failed: " + msg}, update_modified=False)
+		frappe.db.commit()
+		frappe.throw(_("Could not connect: {0}").format(msg))
+
+
+def _email_html(body):
+	"""Wrap the plain-text (\\n) body in a clean branded HTML shell."""
+	import html as _html
+	esc = _html.escape(body or "")
+	paras = "".join(
+		"<p style='margin:0 0 14px'>" + p.replace("\n", "<br>") + "</p>"
+		for p in esc.split("\n\n") if p.strip())
+	return (
+		"<div style='font-family:Arial,Helvetica,sans-serif;color:#1f2937;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden'>"
+		"<div style='background:#0F1A2E;color:#fff;padding:16px 24px;font-family:Georgia,serif;font-weight:700;font-size:18px;letter-spacing:.02em'>Shradha Realty</div>"
+		"<div style='padding:24px;font-size:14px;line-height:1.65'>" + paras + "</div>"
+		"<div style='padding:14px 24px;background:#f3f4f6;color:#6b7280;font-size:12px'>Shradha Realty · Nagpur · This email was sent via the Shradha CRM.</div>"
+		"</div>")
+
+
+@frappe.whitelist()
+def send_email(payload):
+	"""Send an email to a lead from the user's configured account, with selected Realty Documents
+	attached. Self-contained smtplib send (does not touch the site's email). Logs a Communication
+	+ a lead activity so it appears on the lead's Activity timeline."""
+	_guard()
+	if isinstance(payload, str):
+		payload = frappe.parse_json(payload)
+	to = (payload.get("to") or "").strip()
+	if not to or "@" not in to:
+		frappe.throw(_("Enter a valid recipient email address."))
+	subject = (payload.get("subject") or "").strip() or "(no subject)"
+	body = (payload.get("body") or "").strip()
+	if not body:
+		frappe.throw(_("The email body is empty."))
+	lead_name = _resolve_lead(payload.get("lead"))
+	# resolve sending account
+	acc_id = payload.get("account")
+	acc = None
+	if acc_id and frappe.db.exists("Realty Email Account", acc_id):
+		acc = frappe.get_doc("Realty Email Account", acc_id)
+		if acc.owner_user and acc.owner_user != frappe.session.user and not _is_manager():
+			frappe.throw(_("You can't send from that account."), frappe.PermissionError)
+	else:
+		d = _default_email_account()
+		if d:
+			acc = frappe.get_doc("Realty Email Account", d["id"])
+	if not acc:
+		frappe.throw(_("No sending email account is configured. Add one in Settings → Email."))
+	if not acc.enabled:
+		frappe.throw(_("That email account is disabled."))
+
+	from email.message import EmailMessage
+	from email.utils import formataddr
+	msg = EmailMessage()
+	msg["Subject"] = subject
+	msg["From"] = formataddr((acc.sender_name or "Shradha Realty", acc.email_id))
+	msg["To"] = to
+	cc = (payload.get("cc") or "").strip()
+	if cc:
+		msg["Cc"] = cc
+	msg.set_content(body)                       # plain-text part
+	msg.add_alternative(_email_html(body), subtype="html")
+
+	# attach selected Realty Documents (any the user can read)
+	from frappe.utils.file_manager import get_file
+	import mimetypes
+	attached = []
+	for doc_id in (payload.get("attachments") or []):
+		if not frappe.db.exists("Realty Document", doc_id):
+			continue
+		rdoc = frappe.get_doc("Realty Document", doc_id)
+		if not frappe.has_permission("Realty Document", "read", rdoc) or not rdoc.file_doc:
+			continue
+		_fn, content = get_file(rdoc.file_url)
+		if isinstance(content, str):
+			content = content.encode("utf-8")
+		import os
+		ext = os.path.splitext(rdoc.file_name or "")[1] or ""
+		mtype = rdoc.mime_type or mimetypes.guess_type(rdoc.file_name or "")[0] or "application/octet-stream"
+		maintype, _sep, subtype = mtype.partition("/")
+		msg.add_attachment(content, maintype=maintype or "application", subtype=subtype or "octet-stream",
+			filename=(frappe.scrub(rdoc.title) or "document") + ext)
+		attached.append(rdoc.title)
+
+	# send (surface SMTP/auth failures as a clean message, not a 500)
+	try:
+		server = _smtp_connect(acc)
+		try:
+			server.send_message(msg)
+		finally:
+			try:
+				server.quit()
+			except Exception:
+				pass
+	except frappe.PermissionError:
+		raise
+	except frappe.ValidationError:
+		raise
+	except Exception as e:
+		frappe.throw(_("Could not send the email via {0}: {1}").format(acc.email_id, str(e)[:160]))
+
+	# audit: Communication + lead activity
+	frappe.get_doc({
+		"doctype": "Communication", "communication_type": "Communication",
+		"communication_medium": "Email", "sent_or_received": "Sent",
+		"subject": subject, "content": _email_html(body), "sender": acc.email_id,
+		"recipients": to,
+		"reference_doctype": "Realty Lead" if lead_name else None,
+		"reference_name": lead_name or None,
+	}).insert(ignore_permissions=True)
+	if lead_name:
+		ld = frappe.get_doc("Realty Lead", lead_name)
+		atxt = (" with " + str(len(attached)) + " attachment" + ("" if len(attached) == 1 else "s")) if attached else ""
+		ld.append("activities", {"activity_datetime": frappe.utils.now(),
+			"who": frappe.utils.get_fullname() or "You", "activity_type": "email",
+			"text": f"Email sent to {to}{atxt}: “{subject}”."})
+		ld.last_activity = frappe.utils.nowdate()
+		ld.save(ignore_permissions=True)
+	frappe.db.commit()
+	return {"ok": True, "attached": attached, "to": to,
+		"activities": _lead_activities(frappe.get_doc("Realty Lead", lead_name)) if lead_name else None}
 
 
 # --------------------------------------------------------------------------- #

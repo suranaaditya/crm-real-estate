@@ -467,6 +467,31 @@ def create_doctypes():
 		f("close_reason", "Data", "Close Reason"),
 	])
 
+	# ---- Email: per-user sending account (SMTP). The smtp_password is a Password field
+	# (encrypted in the __Auth table). This is SELF-CONTAINED — sending uses smtplib with
+	# these creds directly and NEVER touches Frappe's site-wide Email Account / default
+	# outgoing, so it can't disturb other apps on this shared box. owner_user blank = a
+	# shared/global account anyone can use; otherwise it belongs to that login.
+	make_doctype("Realty Email Account", autoname="field:account_id", title_field="email_id",
+		search_fields="email_id,sender_name", allow_rename=0, fields=[
+		f("account_id", "Data", "Account ID", reqd=1, unique=1, in_list_view=1),
+		f("email_id", "Data", "Email Address", reqd=1, in_list_view=1),
+		f("sender_name", "Data", "Sender Name", in_list_view=1),
+		f("col_break_ea1", "Column Break"),
+		f("owner_user", "Link", "Owner (User)", options="User"),
+		f("is_default", "Check", "Default", default="0", in_list_view=1),
+		f("enabled", "Check", "Enabled", default="1"),
+		f("has_password", "Check", "Password Set", read_only=1, default="0"),
+		f("sec_break_ea_smtp", "Section Break", "SMTP"),
+		f("smtp_host", "Data", "SMTP Host", default="smtp.gmail.com"),
+		f("smtp_port", "Int", "SMTP Port", default="465"),
+		f("use_ssl", "Check", "Use SSL", default="1"),
+		f("col_break_ea2", "Column Break"),
+		f("smtp_password", "Password", "App Password"),
+		f("last_tested", "Datetime", "Last Tested"),
+		f("last_status", "Data", "Last Status"),
+	])
+
 
 def after_install():
 	create_roles()

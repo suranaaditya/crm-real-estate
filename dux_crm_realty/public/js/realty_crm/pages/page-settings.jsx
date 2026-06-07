@@ -10,6 +10,7 @@ window.PageSettings = function PageSettings() {
     { id: "projects", label: "Projects" },
     { id: "stages", label: "Lead stages" },
     { id: "sources", label: "Sources" },
+    { id: "email", label: "Email" },
     { id: "templates", label: "Templates" },
     { id: "integrations", label: "Integrations" },
   ];
@@ -35,6 +36,7 @@ window.PageSettings = function PageSettings() {
         {section === "projects" && <ProjectsSettings />}
         {section === "stages" && <StagesSettings />}
         {section === "sources" && <SourcesSettings />}
+        {section === "email" && <EmailSettings />}
         {section === "templates" && <SimpleListSettings title="Message templates" items={["Welcome SMS", "Visit confirmation", "Follow-up call script", "Booking confirmation", "Payment reminder", "Possession invite"]} />}
         {section === "integrations" && <IntegrationsSettings />}
       </div>
@@ -191,6 +193,76 @@ function SourcesSettings() {
           <Btn variant="outline" size="sm" icon="plus" onClick={add}>Add</Btn>
         </div>
       )}
+    </div>
+  );
+}
+
+function EmailSettings() {
+  const data = window.CRM_DATA;
+  const accounts = data.emailAccounts || [];
+  const [editing, setEditing] = React.useState(undefined);  // undefined=closed · null=new · obj=edit
+  const [testing, setTesting] = React.useState("");
+  const act = async (method, args, msg, ind) => {
+    try { await frappe.call({ method: "dux_crm_realty.api.crm." + method, args }); frappe.show_alert({ message: msg, indicator: ind || "blue" }); await refreshCRM(); }
+    catch (e) { frappe.msgprint(e.message || "Action failed"); }
+  };
+  const test = async (a) => {
+    setTesting(a.id);
+    try { await frappe.call({ method: "dux_crm_realty.api.crm.test_email_account", args: { account: a.id } }); frappe.show_alert({ message: "Connection OK — " + a.email, indicator: "green" }); }
+    catch (e) { frappe.msgprint(e.message || "Connection failed"); }
+    setTesting(""); await refreshCRM();
+  };
+  const del = (a) => frappe.confirm(`Remove <b>${a.email}</b> as a sending address?`, () => act("delete_email_account", { account: a.id }, "Removed", "orange"));
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Email</div>
+          <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>Add the address you send lead emails from. For Gmail, use an App Password (not your login password).</div>
+        </div>
+        <Btn variant="primary" size="sm" icon="plus" onClick={() => setEditing(null)}>Add email account</Btn>
+      </div>
+
+      <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 10 }}>
+        {accounts.length === 0 && (
+          <div style={{ padding: 28, textAlign: "center", border: "1px dashed var(--hairline)", borderRadius: 12, color: "var(--neutral-400)", fontSize: 13 }}>
+            No sending email yet. Add your Gmail (with an App Password) to start emailing leads from the CRM.
+          </div>
+        )}
+        {accounts.map(a => (
+          <div key={a.id} style={{ padding: "14px 18px", background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+            <div style={{ width: 38, height: 38, borderRadius: 9, background: "var(--neutral-100)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--neutral-600)", flexShrink: 0 }}>
+              <Icon name="mail" size={17} />
+            </div>
+            <div style={{ minWidth: 200, flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {a.email}
+                {a.isDefault && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: "var(--dux-amber-100)", color: "var(--dux-amber-600)", textTransform: "uppercase" }}>Default</span>}
+                {a.shared && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: "var(--info-bg)", color: "var(--info)", textTransform: "uppercase" }}>Shared</span>}
+                {!a.enabled && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: "var(--neutral-100)", color: "var(--neutral-400)", textTransform: "uppercase" }}>Disabled</span>}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--neutral-400)", marginTop: 2 }}>
+                {a.senderName ? a.senderName + " · " : ""}{a.smtpHost}:{a.smtpPort}
+                {!a.hasPassword && <span style={{ color: "var(--error)" }}> · no password set</span>}
+                {a.lastStatus && <span style={{ color: a.lastStatus === "OK" ? "var(--success)" : "var(--error)" }}> · {a.lastStatus === "OK" ? "verified" : a.lastStatus}</span>}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {!a.isDefault && (a.mine || a.shared) && <Btn variant="ghost" size="sm" onClick={() => act("set_default_email_account", { account: a.id }, "Set as default", "green")}>Make default</Btn>}
+              <Btn variant="soft" size="sm" onClick={() => test(a)}>{testing === a.id ? "Testing…" : "Test"}</Btn>
+              <Btn variant="soft" size="sm" icon="edit" onClick={() => setEditing(a)}>Edit</Btn>
+              <Btn variant="ghost" size="sm" icon="x" onClick={() => del(a)}>Remove</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 20, padding: 14, background: "var(--neutral-50)", border: "1px solid var(--hairline)", borderRadius: 10, fontSize: 12, color: "var(--neutral-600)", display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <Icon name="mail" size={14} style={{ marginTop: 1, color: "var(--dux-amber-600)" }} />
+        <span>Emails are sent directly from your address over SMTP — they don't go through any shared mailbox. Your app password is stored encrypted and is never shown again.</span>
+      </div>
+
+      <EmailAccountModal open={editing !== undefined} account={editing || null} onClose={() => setEditing(undefined)} onSaved={refreshCRM} />
     </div>
   );
 }
