@@ -1,7 +1,7 @@
 import React from "react";
 /* Inventory — tower selector + floor/unit grid. Uses CRM_DATA.abhimanGrid + projects. */
 
-window.PageInventory = function PageInventory() {
+window.PageInventory = function PageInventory({ search = "" }) {
   const data = window.CRM_DATA;
   const [activeProject, setActiveProject] = React.useState((data.projects[0] && data.projects[0].id) || "P-AN");
   const [filter, setFilter] = React.useState("all");
@@ -59,6 +59,15 @@ window.PageInventory = function PageInventory() {
 
   const statusCounts = { available: 0, blocked: 0, reserved: 0, sold: 0 };
   allUnits.forEach(u => { if (statusCounts[u.status] != null) statusCounts[u.status]++; });
+
+  // Top-bar search filters the displayed grid (unit no./typology/status/held lead).
+  const unitQuery = (search || "").trim().toLowerCase();
+  const matchUnit = (u) => {
+    if (!unitQuery) return true;
+    const held = (u.holds || []).map(h => `${h.leadName || ""} ${h.contactName || ""} ${h.requestedBy || ""}`).join(" ");
+    return `${u.id} ${u.num} ${u.typology} ${u.status} ${held}`.toLowerCase().includes(unitQuery);
+  };
+  const matchCount = unitQuery ? allUnits.filter(matchUnit).length : null;
 
   // Re-resolve the selected unit from the live grid each render so the panel never
   // shows a stale object after a refresh, and auto-closes if a filter hides it.
@@ -202,7 +211,7 @@ window.PageInventory = function PageInventory() {
 
         {grid && (
           <>
-            <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
               <FilterChip active={filter === "all"} onClick={() => setFilter("all")} count={allUnits.length}>All</FilterChip>
               {Object.entries(statusColors).map(([k, s]) => (
                 <FilterChip key={k} active={filter === k} onClick={() => setFilter(k)} count={statusCounts[k] || 0}>
@@ -212,15 +221,24 @@ window.PageInventory = function PageInventory() {
                   </span>
                 </FilterChip>
               ))}
+              {unitQuery && <span style={{ fontSize: 12, color: "var(--neutral-500)" }}><strong style={{ color: "var(--neutral-800)" }}>{matchCount}</strong> unit{matchCount === 1 ? "" : "s"} match “{search.trim()}”</span>}
             </div>
+
+            {unitQuery && matchCount === 0 && (
+              <div style={{ padding: 32, textAlign: "center", color: "var(--neutral-400)", border: "1px dashed var(--hairline)", borderRadius: 12, fontSize: 14 }}>
+                No units match “{search.trim()}” in {proj.name}.
+              </div>
+            )}
 
             {Object.entries(grid).map(([tower, floors]) => {
               const sortedFloors = Object.keys(floors).map(Number).sort((a, b) => b - a);
+              const towerVisible = Object.values(floors).flat().filter(u => (filter === "all" || u.status === filter) && matchUnit(u)).length;
+              if ((filter !== "all" || unitQuery) && towerVisible === 0) return null;
               return (
                 <div key={tower} style={{ marginBottom: 32 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
                     <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700 }}>Tower {tower}</div>
-                    <div style={{ fontSize: 12, color: "var(--neutral-400)" }}>{Object.values(floors).flat().length} units</div>
+                    <div style={{ fontSize: 12, color: "var(--neutral-400)" }}>{(filter === "all" && !unitQuery) ? Object.values(floors).flat().length + " units" : towerVisible + " shown"}</div>
                   </div>
                   <div style={{
                     background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, padding: 16,
@@ -228,8 +246,8 @@ window.PageInventory = function PageInventory() {
                   }}>
                     {sortedFloors.map(f => {
                       const units = (floors[f] || []).slice().sort((a, b) => (a.num || a.unit || "").localeCompare(b.num || b.unit || ""));
-                      const visible = filter === "all" ? units : units.filter(u => u.status === filter);
-                      if (filter !== "all" && visible.length === 0) return null;
+                      const visible = units.filter(u => (filter === "all" || u.status === filter) && matchUnit(u));
+                      if ((filter !== "all" || unitQuery) && visible.length === 0) return null;
                       return (
                         <div key={f} style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: 12, alignItems: "center" }}>
                           <div style={{

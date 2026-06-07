@@ -6,7 +6,8 @@ const { useState: wUseState } = React;
 
 window.Workspace = function Workspace({ density = "comfortable", defaultView = "table", initial = "leads" }) {
   const [activePage, setActivePage] = wUseState(initial);
-  const onNav = (id) => setActivePage(id);
+  const [invSearch, setInvSearch] = wUseState("");   // Inventory top-bar search
+  const onNav = (id) => { setActivePage(id); setInvSearch(""); };
 
   // Pages that bring their own topbar / chrome
   const pageMeta = {
@@ -33,13 +34,14 @@ window.Workspace = function Workspace({ density = "comfortable", defaultView = "
     <div style={{ display: "flex", height: "100%", background: "var(--neutral-50)", overflow: "hidden" }}>
       <Sidebar active={activePage} onNav={onNav} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <Topbar title={meta.title} subtitle={meta.subtitle}>
+        <Topbar title={meta.title} subtitle={meta.subtitle}
+          {...(activePage === "inventory" ? { search: invSearch, onSearch: setInvSearch, searchPlaceholder: "Search units — A-0703, 3 BHK, lead…" } : {})}>
           {activePage === "dashboard" && <Btn variant="accent" icon="plus" size="sm" onClick={() => window.__openNewLead && window.__openNewLead()}>New Lead</Btn>}
         </Topbar>
         {activePage === "dashboard" && <PageDashboard onNav={onNav} />}
         {activePage === "calendar"  && <PageCalendar key="my-day" />}
         {activePage === "visits"    && <PageCalendar key="visits" initialKind="visits" teamView />}
-        {activePage === "inventory" && <PageInventory />}
+        {activePage === "inventory" && <PageInventory search={invSearch} />}
         {activePage === "bookings"  && <PageBookings />}
         {activePage === "payments"  && <PagePayments />}
         {activePage === "partners"  && <PagePartners />}

@@ -242,26 +242,30 @@ window.Topbar = function Topbar({ title, subtitle, children, accent, search, onS
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 20, letterSpacing: "-0.01em" }}>{title}</div>
         </div>
       </div>
-      <div style={{
-        display: "flex", alignItems: "center",
-        background: "var(--neutral-50)", borderRadius: 8, padding: "8px 12px",
-        gap: 8, width: 320, border: "1px solid transparent",
-      }}>
-        <Icon name="search" size={16} style={{ color: "var(--neutral-400)" }} />
-        <input placeholder={searchPlaceholder || "Search leads, projects, units…"}
-          data-crm-search={onSearch ? "1" : undefined}
-          value={onSearch ? (search || "") : undefined}
-          onChange={onSearch ? (e) => onSearch(e.target.value) : undefined}
-          style={{ background: "transparent", border: 0, outline: "none", flex: 1, fontFamily: "var(--font-body)", fontSize: 14 }} />
-        {onSearch && search ? (
-          <button onClick={() => onSearch("")} title="Clear" style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--neutral-400)", display: "inline-flex" }}><Icon name="x" size={14} /></button>
-        ) : (
-        <kbd title="Press / to search" style={{
-          fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--neutral-400)",
-          padding: "2px 7px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--hairline)"
-        }}>/</kbd>
-        )}
-      </div>
+      {/* Only render the search when it's actually wired (onSearch), so non-search
+          pages don't show a dead box + misleading "/" hint. */}
+      {onSearch && (
+        <div style={{
+          display: "flex", alignItems: "center",
+          background: "var(--neutral-50)", borderRadius: 8, padding: "8px 12px",
+          gap: 8, width: 320, border: "1px solid transparent",
+        }}>
+          <Icon name="search" size={16} style={{ color: "var(--neutral-400)" }} />
+          <input placeholder={searchPlaceholder || "Search…"}
+            data-crm-search="1"
+            value={search || ""}
+            onChange={(e) => onSearch(e.target.value)}
+            style={{ background: "transparent", border: 0, outline: "none", flex: 1, fontFamily: "var(--font-body)", fontSize: 14 }} />
+          {search ? (
+            <button onClick={() => onSearch("")} title="Clear" style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--neutral-400)", display: "inline-flex" }}><Icon name="x" size={14} /></button>
+          ) : (
+            <kbd title="Press / to search" style={{
+              fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--neutral-400)",
+              padding: "2px 7px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--hairline)"
+            }}>/</kbd>
+          )}
+        </div>
+      )}
       <button title="Notifications" style={iconBtn}><Icon name="bell" size={18} /><span style={notifDot} /></button>
       {children}
     </header>

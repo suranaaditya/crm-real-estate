@@ -26,7 +26,11 @@ frappe.pages["realty-crm"].on_page_load = function (wrapper) {
 	const $wrapper = $(wrapper);
 	// Immersive: drop Frappe's page head + body padding so the CRM owns the viewport.
 	$wrapper.find(".page-head").hide();
-	const navH = $(".navbar").outerHeight() || 60;
+	// Reserve space for the desk navbar ONLY if one is actually present+visible — this
+	// desk renders the CRM full-bleed with no navbar, so a hardcoded fallback would
+	// leave a dead strip at the bottom. Measure it; default to 0 when absent.
+	const $nav = $(".navbar");
+	const navH = ($nav.length && $nav.is(":visible")) ? ($nav.outerHeight() || 0) : 0;
 	const mount = $('<div class="realty-crm-root"></div>').css({
 		height: "calc(100vh - " + navH + "px)",
 		overflow: "hidden",
