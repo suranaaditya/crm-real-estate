@@ -78,6 +78,7 @@ function TweaksControl({ tweaks, setTweak }) {
 window.RealtyApp = function RealtyApp() {
   const [nonce, setNonce] = React.useState(0);
   const [newLeadOpen, setNewLeadOpen] = React.useState(false);
+  const [pwdOpen, setPwdOpen] = React.useState(false);
   const [tweaks, setTweak] = useLocalTweaks();
 
   React.useEffect(() => {
@@ -106,6 +107,7 @@ window.RealtyApp = function RealtyApp() {
 
   // exposed so deep buttons (New Lead) + write actions can reach the root
   window.__openNewLead = () => setNewLeadOpen(true);
+  window.__openChangePassword = () => setPwdOpen(true);
   window.__refreshCRM = async () => {
     const r = await frappe.call({ method: "dux_crm_realty.api.crm.get_bootstrap" });
     window.CRM_DATA = r.message;
@@ -126,6 +128,7 @@ window.RealtyApp = function RealtyApp() {
     <div style={{ height: "100%", position: "relative", background: "var(--neutral-50)" }} data-nonce={nonce}>
       <Workspace density={tweaks.density} defaultView={tweaks.defaultView} initial="dashboard" />
       <NewLeadModal open={newLeadOpen} onClose={() => setNewLeadOpen(false)} onSave={handleSave} />
+      <ChangePasswordModal open={pwdOpen} onClose={() => setPwdOpen(false)} />
     </div>
   );
 };

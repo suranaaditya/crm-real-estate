@@ -841,6 +841,56 @@ window.SetPasswordModal = function SetPasswordModal({ user, onClose, onSaved }) 
   );
 };
 
+// ---------- Change my own password (self-service) ----------
+window.ChangePasswordModal = function ChangePasswordModal({ open, onClose }) {
+  const [cur, setCur] = useStateF("");
+  const [nw, setNw] = useStateF("");
+  const [cf, setCf] = useStateF("");
+  const [busy, setBusy] = useStateF(false);
+  const [done, setDone] = useStateF(false);
+  useEffectF(() => { if (open) { setCur(""); setNw(""); setCf(""); setBusy(false); setDone(false); } }, [open]);
+  if (!open) return null;
+  const save = async () => {
+    if (!cur) { frappe.msgprint("Enter your current password."); return; }
+    if ((nw || "").length < 10) { frappe.msgprint("New password must be at least 10 characters."); return; }
+    if (nw !== cf) { frappe.msgprint("The two new-password entries do not match."); return; }
+    setBusy(true);
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.change_my_password",
+        args: { current_password: cur, new_password: nw } });
+      setDone(true);
+      setCur(""); setNw(""); setCf("");
+    } catch (e) { frappe.msgprint(e.message || "Could not change the password"); setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} eyebrow="MY ACCOUNT" title="Change your password"
+      subtitle={((window.CRM_DATA && window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.name) || "") + " · signed in"}
+      width={520}
+      footer={done
+        ? <Btn variant="accent" size="sm" icon="check" onClick={onClose}>Done</Btn>
+        : <><Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+            <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Saving…" : "Change password"}</Btn></>}>
+      {done ? (
+        <div style={{ padding: 14, border: "1px solid var(--success)", background: "var(--success-bg)", borderRadius: 10, fontSize: 13, color: "var(--success)" }}>
+          Your password has been changed. You stay signed in here; any other devices have been signed out.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <Field label="Current password" required>
+            <Input type="password" autoFocus value={cur} onChange={(e) => setCur(e.target.value)} />
+          </Field>
+          <Field label="New password" required hint="At least 10 characters. Use a mix of letters, numbers and a symbol.">
+            <Input type="password" value={nw} onChange={(e) => setNw(e.target.value)} />
+          </Field>
+          <Field label="Confirm new password" required error={cf && nw !== cf ? "Does not match" : null}>
+            <Input type="password" value={cf} onChange={(e) => setCf(e.target.value)} />
+          </Field>
+        </div>
+      )}
+    </Modal>
+  );
+};
+
 // ---------- Hold / Reserve request modal (inventory) ----------
 window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initialKind, onSaved }) {
   const data = window.CRM_DATA;

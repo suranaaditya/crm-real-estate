@@ -240,7 +240,12 @@ window.Sidebar = function Sidebar({ active = "leads", compact = false, onNav }) 
         {!compact && (
           <div style={{ lineHeight: 1.2, flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-display)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{_me().name}</div>
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{_me().role || "Team member"}</div>
+            <button onClick={() => window.__openChangePassword && window.__openChangePassword()}
+              title="Change your password"
+              style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer",
+                fontSize: 11, color: "rgba(255,255,255,0.55)", textAlign: "left" }}>
+              {_me().role || "Team member"} · <span style={{ textDecoration: "underline" }}>Change password</span>
+            </button>
           </div>
         )}
         {!compact && <Icon name="settings" size={16} style={{ color: "rgba(255,255,255,0.55)" }} />}

@@ -1747,6 +1747,49 @@ def _assert_roles_unprivileged(email):
 
 
 @frappe.whitelist()
+def change_my_password(current_password, new_password):
+	"""Self-service password change for the signed-in user.
+
+	The CRM renders full-bleed with no desk chrome, so there is no other way for a
+	client user to change the first-time password we issued them. Requires the
+	current password so an unattended session can't be hijacked into a lockout.
+	"""
+	_guard()
+	user = frappe.session.user
+	if user in PROTECTED_USERS:
+		frappe.throw(_("This account's password must be changed by the server administrator."))
+	new_password = new_password or ""
+	if len(new_password) < MIN_PASSWORD_LEN:
+		frappe.throw(_("New password must be at least {0} characters.").format(MIN_PASSWORD_LEN))
+	if new_password == (current_password or ""):
+		frappe.throw(_("The new password must be different from the current one."))
+	from frappe.utils.password import check_password
+	try:
+		check_password(user, current_password or "")
+	except frappe.AuthenticationError:
+		# Plain ValidationError on purpose: re-raising AuthenticationError makes Frappe
+		# tear down the session, so a single typo would sign the user out of the app.
+		frappe.throw(_("Your current password is not correct."))
+	doc = frappe.get_doc("User", user)
+	doc.new_password = new_password
+	doc.save(ignore_permissions=True)
+	# invalidate any outstanding reset link and OTHER sessions, keep this one alive
+	frappe.db.set_value("User", user, {
+		"reset_password_key": "", "last_reset_password_key_generated_on": None},
+		update_modified=False)
+	try:
+		frappe.sessions.clear_sessions(user, keep_current=True, force=True)
+	except Exception:
+		pass
+	if frappe.db.exists("Realty CRM User", user):
+		frappe.db.set_value("Realty CRM User", user, {
+			"password_set_on": frappe.utils.now(), "password_set_by": "self"},
+			update_modified=False)
+	frappe.db.commit()
+	return {"ok": True}
+
+
+@frappe.whitelist()
 def list_crm_users():
 	"""Logins this CRM manages. Deliberately NOT part of get_bootstrap — the roster
 	of colleague emails/login states is admin-only."""
