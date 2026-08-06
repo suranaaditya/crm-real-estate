@@ -19,12 +19,15 @@ window.PageDashboard = function PageDashboard({ onNav }) {
 
   // Project performance
   const projPerf = data.projects.map(p => ({
-    ...p, soldPct: Math.round((p.sold / p.totalUnits) * 100),
+    ...p, soldPct: p.totalUnits ? Math.round((p.sold / p.totalUnits) * 100) : 0,
     revenue: p.sold * ((p.priceFrom + p.priceTo) / 2),
   }));
 
   // Recent activity (last 8 leads by lastActivity)
-  const recent = [...data.leads].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity)).slice(0, 6);
+  // lastActivity can legitimately be null on imported leads — guard the sort.
+  const recent = [...data.leads]
+    .sort((a, b) => String(b.lastActivity || "").localeCompare(String(a.lastActivity || "")))
+    .slice(0, 6);
 
   // Today's tasks
   const todayTasks = data.tasks.filter(t => !t.done).slice(0, 5);
@@ -39,7 +42,7 @@ window.PageDashboard = function PageDashboard({ onNav }) {
       }}>
         <div>
           <div className="dux-eyebrow" style={{ color: "var(--dux-amber)", fontSize: 11, marginBottom: 8 }}>WEDNESDAY · 29 APR 2026</div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, lineHeight: 1.2 }}>Good morning, Priya.</div>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, lineHeight: 1.2 }}>{"Good " + (new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening") + ", " + String(_me().name).split(" ")[0] + "."}</div>
           <div style={{ fontSize: 14, color: "rgba(255,255,255,0.72)", marginTop: 6 }}>
             You have <strong style={{ color: "#fff" }}>{visitsToday} site visits</strong> today and <strong style={{ color: "var(--dux-amber)" }}>3 overdue follow-ups</strong>.
           </div>

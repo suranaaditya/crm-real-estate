@@ -4,9 +4,11 @@ import React from "react";
 window.PageSettings = function PageSettings() {
   const [section, setSection] = React.useState("workspace");
 
+  const canUsers = !!(window.CRM_DATA && window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.canManageUsers);
   const sections = [
     { id: "workspace", label: "Workspace" },
     { id: "team", label: "Team & roles" },
+    ...(canUsers ? [{ id: "users", label: "Users & access" }] : []),
     { id: "projects", label: "Projects" },
     { id: "stages", label: "Lead stages" },
     { id: "sources", label: "Sources" },
@@ -33,6 +35,7 @@ window.PageSettings = function PageSettings() {
       <div style={{ overflow: "auto", padding: 32, maxWidth: 920 }}>
         {section === "workspace" && <WorkspaceSettings />}
         {section === "team" && <TeamSettings />}
+        {section === "users" && <UsersSettings />}
         {section === "projects" && <ProjectsSettings />}
         {section === "stages" && <StagesSettings />}
         {section === "sources" && <SourcesSettings />}
@@ -110,6 +113,88 @@ function TeamSettings() {
         {team.length === 0 && <div style={{ padding: 24, fontSize: 13, color: "var(--neutral-400)" }}>No team members yet.</div>}
       </div>
       <AddRepModal open={addOpen} onClose={() => setAddOpen(false)} onSaved={refreshCRM} />
+    </div>
+  );
+}
+
+const LOGIN_ROLES = [
+  ["Realty Sales Executive", "Sales Executive"],
+  ["Realty Sales Manager", "Sales Manager"],
+  ["Realty Finance", "Finance"],
+  ["Realty Admin", "Admin"],
+];
+
+function UsersSettings() {
+  const data = window.CRM_DATA;
+  const [rows, setRows] = React.useState(null);   // null = loading
+  const [addOpen, setAddOpen] = React.useState(false);
+  const [pwdFor, setPwdFor] = React.useState(null);
+  const load = async () => {
+    try { const r = await frappe.call({ method: "dux_crm_realty.api.crm.list_crm_users" }); setRows(r.message || []); }
+    catch (e) { frappe.msgprint(e.message || "Could not load logins"); setRows([]); }
+  };
+  React.useEffect(() => { load(); }, []);
+  const call = async (method, args, msg) => {
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm." + method, args });
+      if (msg) frappe.show_alert({ message: msg, indicator: "green" });
+      await load();
+      if (window.__refreshCRM) await window.__refreshCRM();
+    } catch (e) { frappe.msgprint(e.message || "Action failed"); }
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Users &amp; access</div>
+          <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>
+            {rows === null ? "Loading…" : rows.length + " login" + (rows.length === 1 ? "" : "s") + " · people who can sign in to the CRM"}
+          </div>
+        </div>
+        <Btn variant="primary" size="sm" icon="plus" onClick={() => setAddOpen(true)}>Add login</Btn>
+      </div>
+
+      <div style={{ marginTop: 16, padding: 12, background: "var(--neutral-50)", border: "1px solid var(--hairline)", borderRadius: 10, fontSize: 12, color: "var(--neutral-600)", display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <Icon name="user" size={14} style={{ marginTop: 1, color: "var(--dux-amber-600)" }} />
+        <span>Only logins created here are listed or changed. Other accounts on this server — including administrators — are never touched, and CRM logins never receive server-admin access.</span>
+      </div>
+
+      <div style={{ marginTop: 20, background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, overflow: "hidden" }}>
+        {rows === null && <div style={{ padding: 24, fontSize: 13, color: "var(--neutral-400)" }}>Loading…</div>}
+        {rows && rows.length === 0 && <div style={{ padding: 24, fontSize: 13, color: "var(--neutral-400)" }}>No CRM logins yet. Use “Add login” to create one for your team.</div>}
+        {(rows || []).map((u, i) => (
+          <div key={u.email} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "auto 1fr auto auto auto auto", gap: 12, alignItems: "center", borderTop: i ? "1px solid var(--hairline)" : "none", opacity: u.enabled ? 1 : 0.55 }}>
+            <Avatar name={u.name} initials={u.initials} size={36} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+                {u.name}
+                {u.isSelf && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "var(--dux-amber-100)", color: "var(--dux-amber-600)" }}>YOU</span>}
+                {!u.passwordSet && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "var(--error-bg)", color: "var(--error)" }}>NO PASSWORD</span>}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{u.email}{u.lastLogin ? " · last login " + u.lastLogin : " · never logged in"}</div>
+            </div>
+            <select value={u.salesOwner || ""} title="Linked sales rep"
+              onChange={(e) => call("link_crm_user_owner", { email: u.email, sales_owner: e.target.value || null }, "Rep link updated")}
+              style={{ padding: "6px 8px", borderRadius: 7, border: "1px solid var(--hairline)", fontSize: 12, background: "var(--bg)" }}>
+              <option value="">— no rep —</option>
+              {(data.owners || []).map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+            </select>
+            <select value={u.role}
+              onChange={(e) => call("set_crm_user_role", { email: u.email, role: e.target.value }, "Access level updated")}
+              style={{ padding: "6px 8px", borderRadius: 7, border: "1px solid var(--hairline)", fontSize: 12, background: "var(--bg)" }}>
+              {LOGIN_ROLES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <Btn variant="soft" size="sm" onClick={() => setPwdFor(u)}>Set password</Btn>
+            <Btn variant="ghost" size="sm"
+              onClick={() => call("set_crm_user_status", { email: u.email, enabled: u.enabled ? 0 : 1 }, u.enabled ? "Login disabled" : "Login enabled")}>
+              {u.enabled ? "Disable" : "Enable"}
+            </Btn>
+          </div>
+        ))}
+      </div>
+
+      <AddLoginModal open={addOpen} onClose={() => setAddOpen(false)} onSaved={async () => { await load(); if (window.__refreshCRM) await window.__refreshCRM(); }} />
+      <SetPasswordModal user={pwdFor} onClose={() => setPwdFor(null)} onSaved={load} />
     </div>
   );
 }

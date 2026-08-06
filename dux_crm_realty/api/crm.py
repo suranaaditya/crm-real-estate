@@ -383,7 +383,10 @@ def get_bootstrap():
 
 	return {
 		"today": "2026-04-29",
-		"currentUser": {**_current_owner(), "isManager": _is_manager()},
+		# NOTE: only the boolean belongs here — the user roster stays admin-only
+		# behind list_crm_users().
+		"currentUser": {**_current_owner(), "isManager": _is_manager(),
+			"canManageUsers": _is_user_admin()},
 		"tasks": all_tasks,
 		"activity": focused["activities"] if focused else [],
 		"projects": projects, "sources": sources, "stages": stages, "owners": [
@@ -405,10 +408,31 @@ def get_bootstrap():
 
 
 def _current_owner():
-	"""Greeting target — pinned to the prototype's logged-in rep when present."""
+	"""Who the app greets and treats as "me".
+
+	Resolves the REAL session user to their Realty Sales Owner (via the owner's
+	``user`` link, else a full-name match). Falls back to the pinned demo persona
+	only when the login isn't mapped to a rep — real per-rep identity is what makes
+	hold/lead attribution meaningful.
+	"""
+	fields = ["full_name", "initials", "role"]
+	row = frappe.db.get_value("Realty Sales Owner", {"user": frappe.session.user},
+		fields, as_dict=True)
+	if not row:
+		fn = frappe.utils.get_fullname()
+		if fn and frappe.db.exists("Realty Sales Owner", fn):
+			row = frappe.db.get_value("Realty Sales Owner", fn, fields, as_dict=True)
+	if row:
+		return {"name": row.full_name, "initials": row.initials, "role": row.role}
+	# A real login that isn't a sales rep (a director, finance, an admin) is greeted
+	# by their own name — never by an arbitrary colleague's.
+	if frappe.session.user not in ("Guest", "Administrator"):
+		fn = frappe.utils.get_fullname()
+		if fn:
+			return {"name": fn, "initials": _initials(fn), "role": ""}
 	if frappe.db.exists("Realty Sales Owner", "Priya Deshmukh"):
 		return {"name": "Priya Deshmukh", "initials": "PD", "role": "Sales Executive"}
-	first = frappe.get_all("Realty Sales Owner", fields=["full_name", "initials", "role"], limit=1)
+	first = frappe.get_all("Realty Sales Owner", fields=fields, limit=1)
 	if first:
 		return {"name": first[0].full_name, "initials": first[0].initials, "role": first[0].role}
 	return {"name": frappe.utils.get_fullname(), "initials": "", "role": ""}
@@ -1597,6 +1621,285 @@ def send_email(payload):
 # Roles a manager may assign to a new login — never System Manager (no escalation).
 SAFE_REALTY_ROLES = ("Realty Sales Executive", "Realty Sales Manager", "Realty Finance", "Realty Admin")
 
+# --------------------------------------------------------------------------- #
+# user administration
+#
+# DELIBERATELY NARROWER than _is_manager(): approving a unit hold is a business
+# decision a Sales Manager makes; resetting a colleague's password is an identity
+# decision, so only Realty Admin / System Manager may do it.
+#
+# The manageable set is EXACTLY the rows in "Realty CRM User" (an explicit
+# allowlist) — never "whoever holds a Realty role". This is a shared server: other
+# people's accounts must stay invisible and untouchable from this app.
+# --------------------------------------------------------------------------- #
+USER_ADMIN_ROLES = ("Realty Admin", "System Manager")
+PRIVILEGED_ROLES = {"System Manager", "Administrator"}
+PROTECTED_USERS = {"Administrator", "Guest"}
+MIN_PASSWORD_LEN = 10
+
+
+def _is_user_admin():
+	return any(r in USER_ADMIN_ROLES for r in frappe.get_roles())
+
+
+def _require_user_admin():
+	_guard()
+	if not _is_user_admin():
+		frappe.throw(_("Only a CRM administrator can manage logins."), frappe.PermissionError)
+
+
+def _safe_role(role):
+	"""Throw on anything outside the Realty four — never silently coerce."""
+	if role not in SAFE_REALTY_ROLES:
+		frappe.throw(_("Invalid access level: {0}").format(role))
+	return role
+
+
+def _is_privileged(user):
+	"""True unless the login holds ONLY Realty roles.
+
+	An allowlist, not a denylist: on a shared ERPNext box the dangerous roles are
+	mostly NOT System Manager (Accounts Manager, HR Manager, Purchase Manager …),
+	so "manageable" must mean "carries nothing beyond the Realty four".
+	"""
+	baseline = {"All", "Guest", "Desk User", "Chat User", "Blogger", "Newsletter Manager"}
+	roles = set(frappe.get_roles(user)) - baseline
+	if roles & PRIVILEGED_ROLES:
+		return True
+	return not roles.issubset(set(SAFE_REALTY_ROLES))
+
+
+def _effective_role(user, fallback=None):
+	"""The role actually held, HIGHEST privilege first — a login carrying both
+	Sales Executive and Admin must not be displayed as merely an executive."""
+	roles = set(frappe.get_roles(user))
+	for r in ("Realty Admin", "Realty Sales Manager", "Realty Finance", "Realty Sales Executive"):
+		if r in roles:
+			return r
+	return fallback or "Realty Sales Executive"
+
+
+def _active_admin_logins(exclude=None):
+	"""Registry logins that are enabled AND actually hold Realty Admin (live roles,
+	not the mirror field, which can drift)."""
+	out = []
+	for u in frappe.get_all("Realty CRM User", pluck="user"):
+		if exclude and u == exclude:
+			continue
+		if not frappe.db.get_value("User", u, "enabled"):
+			continue
+		if "Realty Admin" in frappe.get_roles(u):
+			out.append(u)
+	return out
+
+
+def _register_login(email, full_name, role, sales_owner=None, password_set=False):
+	"""Every login this app creates MUST land in the registry, or it becomes
+	permanently unmanageable (absent from _managed_user)."""
+	if frappe.db.exists("Realty CRM User", email):
+		return
+	frappe.get_doc({
+		"doctype": "Realty CRM User", "user": email, "full_name": full_name,
+		"crm_role": role, "sales_owner": sales_owner, "status": "Active", "created_by_crm": 1,
+		"password_set_on": frappe.utils.now() if password_set else None,
+		"password_set_by": frappe.utils.get_fullname() if password_set else None,
+	}).insert(ignore_permissions=True)
+
+
+def _revoke_credentials(email):
+	"""After an admin sets a password: kill outstanding reset links and live
+	sessions, so an old /update-password key or a stolen session can't be reused."""
+	frappe.db.set_value("User", email, {
+		"reset_password_key": "", "last_reset_password_key_generated_on": None},
+		update_modified=False)
+	try:
+		frappe.sessions.clear_sessions(email, keep_current=(email == frappe.session.user), force=True)
+	except Exception:
+		pass
+
+
+def _managed_user(email):
+	"""The single choke point: resolve a login this app is allowed to act on.
+
+	Refuses protected accounts, accounts absent from the registry, and any login
+	that holds server-admin privileges (checked live, so a login that later gains
+	System Manager immediately drops out of CRM management). Unknown and
+	unregistered return the SAME message so this can't enumerate accounts.
+	"""
+	email = (email or "").strip().lower()
+	generic = _("That login is not managed by this CRM.")
+	if not email or email in {u.lower() for u in PROTECTED_USERS}:
+		frappe.throw(generic, frappe.PermissionError)
+	if not frappe.db.exists("Realty CRM User", email):
+		frappe.throw(generic, frappe.PermissionError)
+	if not frappe.db.exists("User", email):
+		frappe.throw(generic, frappe.PermissionError)
+	if _is_privileged(email):
+		frappe.throw(generic, frappe.PermissionError)
+	return email
+
+
+def _assert_roles_unprivileged(email):
+	"""Post-condition: never leave a CRM login holding server-admin roles."""
+	if _is_privileged(email):
+		frappe.db.rollback()
+		frappe.throw(_("Refusing to grant server-administrator access."), frappe.PermissionError)
+
+
+@frappe.whitelist()
+def list_crm_users():
+	"""Logins this CRM manages. Deliberately NOT part of get_bootstrap — the roster
+	of colleague emails/login states is admin-only."""
+	_require_user_admin()
+	out = []
+	for r in frappe.get_all("Realty CRM User",
+			fields=["name", "user", "full_name", "crm_role", "sales_owner", "status",
+				"password_set_on", "created_by_crm"], order_by="creation asc"):
+		if _is_privileged(r.user):
+			continue  # invisible, not just unmanageable
+		u = frappe.db.get_value("User", r.user, ["enabled", "last_login", "full_name"],
+			as_dict=True) or {}
+		out.append({
+			"email": r.user, "name": r.full_name or u.get("full_name") or r.user,
+			"role": _effective_role(r.user, r.crm_role),
+			"roleLabel": _effective_role(r.user, r.crm_role).replace("Realty ", ""),
+			"salesOwner": r.sales_owner, "status": r.status,
+			"enabled": bool(u.get("enabled")), "lastLogin": _s(u.get("last_login")),
+			"passwordSet": bool(r.password_set_on),
+			"isSelf": r.user == frappe.session.user,
+			"initials": _initials(r.full_name or u.get("full_name") or r.user),
+		})
+	return out
+
+
+@frappe.whitelist()
+def create_crm_user(payload):
+	"""Create a login for client staff + register it as CRM-managed."""
+	_require_user_admin()
+	if isinstance(payload, str):
+		payload = frappe.parse_json(payload)
+	email = (payload.get("email") or "").strip().lower()
+	full_name = (payload.get("full_name") or "").strip()
+	role = _safe_role(payload.get("role") or "Realty Sales Executive")
+	password = payload.get("password") or ""
+	if not email or "@" not in email:
+		frappe.throw(_("A valid email is required — it becomes the login id."))
+	if not full_name:
+		frappe.throw(_("Full name is required."))
+	if email in {u.lower() for u in PROTECTED_USERS}:
+		frappe.throw(_("That login cannot be used."), frappe.PermissionError)
+	if frappe.db.exists("Realty CRM User", email) or frappe.db.exists("User", email):
+		# One generic message for both cases: a distinguishing error would let any
+		# client admin probe this shared box for which addresses have accounts.
+		# (Never adopt an existing account either — that would hand a stranger a CRM
+		# identity via _actor_owner().)
+		frappe.throw(_("That email can't be used for a new CRM login. "
+			"Use a different address, or ask the server administrator."))
+	if password and len(password) < MIN_PASSWORD_LEN:
+		frappe.throw(_("Password must be at least {0} characters.").format(MIN_PASSWORD_LEN))
+
+	doc = frappe.get_doc({
+		"doctype": "User", "email": email, "first_name": full_name,
+		"enabled": 1, "send_welcome_email": 0, "user_type": "System User",
+		"roles": [{"role": role}],
+	})
+	if password:
+		doc.new_password = password
+	doc.insert(ignore_permissions=True)
+	_assert_roles_unprivileged(email)
+
+	owner = payload.get("sales_owner") or None
+	if owner and frappe.db.exists("Realty Sales Owner", owner):
+		if not frappe.db.get_value("Realty Sales Owner", owner, "user"):
+			frappe.db.set_value("Realty Sales Owner", owner, "user", email)
+	else:
+		owner = None
+	_register_login(email, full_name, role, owner, password_set=bool(password))
+	frappe.db.commit()
+	return {"ok": True, "email": email, "role": role}
+
+
+@frappe.whitelist()
+def set_crm_user_password(email, password):
+	"""Set a temporary password (works without SMTP on this box)."""
+	_require_user_admin()
+	email = _managed_user(email)
+	password = password or ""
+	if len(password) < MIN_PASSWORD_LEN:
+		frappe.throw(_("Password must be at least {0} characters.").format(MIN_PASSWORD_LEN))
+	u = frappe.get_doc("User", email)
+	u.new_password = password
+	u.save(ignore_permissions=True)
+	_revoke_credentials(email)
+	frappe.db.set_value("Realty CRM User", email, {
+		"password_set_on": frappe.utils.now(),
+		"password_set_by": frappe.utils.get_fullname()}, update_modified=False)
+	frappe.db.commit()
+	return {"ok": True, "email": email}
+
+
+@frappe.whitelist()
+def set_crm_user_status(email, enabled):
+	"""Enable/disable a login. Can't disable yourself or the last active admin."""
+	_require_user_admin()
+	email = _managed_user(email)
+	on = str(enabled) in ("1", "true", "True")
+	if not on:
+		if email == frappe.session.user:
+			frappe.throw(_("You can't disable your own login."))
+		if "Realty Admin" in frappe.get_roles(email) and not _active_admin_logins(exclude=email):
+			frappe.throw(_("This is the last active CRM administrator."))
+	frappe.db.set_value("User", email, "enabled", 1 if on else 0)
+	frappe.db.set_value("Realty CRM User", email, "status",
+		"Active" if on else "Disabled", update_modified=False)
+	frappe.db.commit()
+	return {"ok": True, "email": email, "enabled": on}
+
+
+@frappe.whitelist()
+def set_crm_user_role(email, role):
+	"""Change access level. Surgical: only touches the four Realty roles, so roles
+	belonging to other apps on this shared site are never removed."""
+	_require_user_admin()
+	email = _managed_user(email)
+	role = _safe_role(role)
+	if ("Realty Admin" in frappe.get_roles(email) and role != "Realty Admin"
+			and not _active_admin_logins(exclude=email)):
+		frappe.throw(_("This is the last active CRM administrator."))
+	u = frappe.get_doc("User", email)
+	have = {r.role for r in u.roles}
+	drop = [r for r in SAFE_REALTY_ROLES if r != role and r in have]
+	if drop:
+		u.remove_roles(*drop)
+	if role not in have:
+		u.add_roles(role)
+	_assert_roles_unprivileged(email)
+	frappe.db.set_value("Realty CRM User", email, "crm_role", role, update_modified=False)
+	frappe.db.commit()
+	return {"ok": True, "email": email, "role": role}
+
+
+@frappe.whitelist()
+def link_crm_user_owner(email, sales_owner=None):
+	"""Link a login to a sales rep so holds/leads are attributed to that person."""
+	_require_user_admin()
+	email = _managed_user(email)
+	owner = sales_owner or None
+	if owner and not frappe.db.exists("Realty Sales Owner", owner):
+		frappe.throw(_("Sales rep {0} not found.").format(owner))
+	# one login <-> one rep
+	for other in frappe.get_all("Realty Sales Owner", filters={"user": email}, pluck="name"):
+		if other != owner:
+			frappe.db.set_value("Realty Sales Owner", other, "user", None)
+	if owner:
+		taken = frappe.db.get_value("Realty Sales Owner", owner, "user")
+		if taken and taken != email:
+			frappe.throw(_("{0} is already linked to another login.").format(owner))
+		frappe.db.set_value("Realty Sales Owner", owner, "user", email)
+	frappe.db.set_value("Realty CRM User", email, "sales_owner", owner, update_modified=False)
+	frappe.db.commit()
+	return {"ok": True, "email": email, "salesOwner": owner}
+
 
 @frappe.whitelist()
 def create_rep(payload):
@@ -1624,7 +1927,11 @@ def create_rep(payload):
 		if frole not in SAFE_REALTY_ROLES:
 			frole = "Realty Sales Executive"
 		if frappe.db.exists("User", email):
-			user_link = email  # link an existing login
+			# Never silently adopt an existing account on this shared box: linking a
+			# stranger's login to a rep would hand them a CRM identity via
+			# _actor_owner() and pass holder/requester gates.
+			frappe.throw(_("An account with that email already exists on this server. "
+				"Use a different address, or link it from Settings → Users & access."))
 		else:
 			u = frappe.get_doc({
 				"doctype": "User", "email": email, "first_name": full_name,
@@ -1633,6 +1940,7 @@ def create_rep(payload):
 			})
 			u.insert(ignore_permissions=True)
 			user_link = u.name
+			_register_login(user_link, full_name, frole)
 	frappe.get_doc({
 		"doctype": "Realty Sales Owner", "full_name": full_name, "owner_id": owner_id,
 		"role": role_text, "initials": initials,

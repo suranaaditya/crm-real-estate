@@ -1,0 +1,123 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:user",
+ "creation": "2026-08-07 01:17:15.230352",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "full_name",
+  "crm_role",
+  "sales_owner",
+  "col_break_cu",
+  "status",
+  "created_by_crm",
+  "password_set_on",
+  "password_set_by",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Login (User)",
+   "options": "User",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "full_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Full Name"
+  },
+  {
+   "default": "Realty Sales Executive",
+   "fieldname": "crm_role",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "CRM Role",
+   "options": "Realty Sales Executive\nRealty Sales Manager\nRealty Finance\nRealty Admin"
+  },
+  {
+   "fieldname": "sales_owner",
+   "fieldtype": "Link",
+   "label": "Sales Rep",
+   "options": "Realty Sales Owner"
+  },
+  {
+   "fieldname": "col_break_cu",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Active\nDisabled"
+  },
+  {
+   "default": "0",
+   "fieldname": "created_by_crm",
+   "fieldtype": "Check",
+   "label": "Created by CRM"
+  },
+  {
+   "fieldname": "password_set_on",
+   "fieldtype": "Datetime",
+   "label": "Password Last Set On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "password_set_by",
+   "fieldtype": "Data",
+   "label": "Password Last Set By",
+   "read_only": 1
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-07 01:26:14.455272",
+ "modified_by": "Administrator",
+ "module": "Dux CRM Realty",
+ "name": "Realty CRM User",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Realty Admin"
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "user,full_name",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "user",
+ "track_changes": 1
+}

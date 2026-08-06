@@ -48,7 +48,7 @@ window.PagePartners = function PagePartners() {
                       background: "var(--dux-navy)", color: "#fff",
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 700,
-                    }}>{p.name.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
+                    }}>{String(p.name || "?").split(" ").filter(Boolean).map(w => w[0]).join("").slice(0, 2)}</div>
                     <div>
                       <div style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 700 }}>{p.name}</div>
                       <div style={{ fontSize: 11, color: "var(--neutral-400)", marginTop: 2 }}>{p.contact} · {p.phone}</div>

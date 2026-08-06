@@ -262,6 +262,49 @@ doctypes, so it won't apply field/option changes to a live site).
   the lead drawer (status/assign/log-call/schedule-visit/tasks), Inventory (New project / Add units /
   block unit), Bookings (advance stage), Payments, My Day calendar (create task, owner selector).
 
+## Real client data (live since 07 Aug 2026)
+
+The demo dataset has been **replaced with Shradha Realty's real records** (from Vinita
+Aswani's 23-Jun-2026 email, 3 files). Source files live in `client-data/` and client
+deliverables in `client-deliverables/` — **both git-ignored (PII)**.
+
+- **853 leads** (Sell.do export + "Till Date Drive" register, 2022→2026), **334 channel
+  partners**, **4 sales owners** (Aniruddha Mahakulkar, Sameer Gedam, Shalu, Gautam Jain),
+  **12 sources**, **18 real projects**. 67 dummy-phone + 109 phone-less records excluded.
+- Importer: `dux_crm_realty/import_client.py` (run with `bench execute … --kwargs "{'path': …}"`).
+  Payload is built LOCALLY by `scratchpad/build_import_payload.py` (all messy parsing —
+  the Sell.do CSV has a column-shift fault on 331/379 rows — stays client-side).
+  **Take a `bench backup` first; the wipe is not reversible.**
+- Demo Bookings / Payment Dues / Site Visits / Tasks were KEPT so those modules still
+  demonstrate; their `lead` links were nulled and owner links re-pointed to real reps
+  before deleting the demo leads (Frappe blocks deleting linked docs).
+- Real data exposed null-safety bugs the demo data hid (dashboard `lastActivity` sort,
+  `soldPct` NaN on 0-unit projects) — **assume more lurk; guard before dereferencing.**
+- 6 client logins exist (see `client-deliverables/_credentials.json`, git-ignored).
+
+## User management (Settings → Users & access)
+
+`Realty CRM User` is an **explicit allowlist** — the ONLY logins this app may manage.
+Never derive manageability from "holds a Realty role" (shared box; other apps' users
+must stay invisible). Endpoints: `list_crm_users`, `create_crm_user`,
+`set_crm_user_password`, `set_crm_user_status`, `set_crm_user_role`, `link_crm_user_owner`.
+
+- Gate is **`_is_user_admin()` (Realty Admin / System Manager) — deliberately NARROWER than
+  `_is_manager()`**. Approving a hold is a business call; resetting a password is an identity
+  call. Do not "simplify" these into one gate.
+- `_is_privileged()` is an **allowlist** (manageable only if roles ⊆ `SAFE_REALTY_ROLES`),
+  not a System-Manager denylist. `_managed_user()` is the single choke point.
+- `Realty CRM User` and `Realty Sales Owner` are **read-only to Sales Executives** — otherwise
+  an exec could add themselves to the allowlist or repoint `Sales Owner.user` and inherit
+  another rep's identity via `_actor_owner()`.
+- `_current_owner()` now resolves the REAL session user (via `Realty Sales Owner.user`),
+  falling back to the login's own name — the pinned "Priya Deshmukh" persona is gone, as are
+  the hardcoded persona strings in `shell.jsx` / `page-dashboard.jsx`.
+- Passwords are set directly (no SMTP on this box) and generated with `crypto.getRandomValues`.
+  Setting one revokes outstanding reset keys + sessions.
+- Modules are deep-linkable via the URL hash (`#leads`, `#inventory`) — also how the
+  PDF screenshots are captured headlessly.
+
 ## Current state (done) & ideas for next
 
 **Done:** all modules render live; full CRUD/actions wired; Project+Inventory creation; lead

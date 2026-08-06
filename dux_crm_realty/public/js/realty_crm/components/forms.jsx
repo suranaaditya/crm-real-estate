@@ -700,6 +700,147 @@ window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
   );
 };
 
+// ---------- Add login + set password (Settings -> Users & access) ----------
+const LOGIN_ROLE_OPTS = [
+  ["Realty Sales Executive", "Sales Executive — leads, own holds"],
+  ["Realty Sales Manager", "Sales Manager — approves holds"],
+  ["Realty Finance", "Finance — payments view"],
+  ["Realty Admin", "Admin — can manage logins"],
+];
+// Credentials must come from a CSPRNG — Math.random() is predictable from a few
+// outputs and every password in this module would inherit that weakness.
+function _rand(n) {
+  const out = new Uint32Array(n);
+  (window.crypto || window.msCrypto).getRandomValues(out);
+  return out;
+}
+function genPassword() {
+  const a = "ABCDEFGHJKLMNPQRSTUVWXYZ", b = "abcdefghijkmnopqrstuvwxyz", c = "23456789", d = "@#$%&*";
+  const pick = (s, n) => { const r = _rand(n); return Array.from({ length: n }, (_, i) => s[r[i] % s.length]).join(""); };
+  const raw = (pick(a, 2) + pick(b, 5) + pick(c, 3) + pick(d, 1)).split("");
+  const r = _rand(raw.length);
+  for (let i = raw.length - 1; i > 0; i--) { const j = r[i] % (i + 1); [raw[i], raw[j]] = [raw[j], raw[i]]; }
+  return raw.join("");
+}
+const copyText = (t) => {
+  try { navigator.clipboard.writeText(t); frappe.show_alert({ message: "Copied", indicator: "green" }); }
+  catch (e) { frappe.msgprint("Copy manually: " + t); }
+};
+
+window.AddLoginModal = function AddLoginModal({ open, onClose, onSaved }) {
+  const data = window.CRM_DATA;
+  const init = () => ({ full_name: "", email: "", role: "Realty Sales Executive", sales_owner: "", password: genPassword() });
+  const [form, setForm] = useStateF(init);
+  const [busy, setBusy] = useStateF(false);
+  const [done, setDone] = useStateF(null);
+  useEffectF(() => { if (open) { setForm(init()); setBusy(false); setDone(null); } }, [open]);
+  const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  if (!open) return null;
+  const save = async () => {
+    if (!form.full_name.trim()) { frappe.msgprint("Full name is required."); return; }
+    if (!form.email.trim() || form.email.indexOf("@") < 0) { frappe.msgprint("A valid email is required — it becomes the login id."); return; }
+    if ((form.password || "").length < 10) { frappe.msgprint("Password must be at least 10 characters."); return; }
+    setBusy(true);
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.create_crm_user", args: { payload: form } });
+      setDone({ email: form.email.trim().toLowerCase(), password: form.password });
+      onSaved && await onSaved();
+    } catch (e) { frappe.msgprint(e.message || "Could not create the login"); setBusy(false); }
+  };
+  if (done) {
+    return (
+      <Modal open={open} onClose={onClose} eyebrow="LOGIN CREATED" title="Share these credentials"
+        subtitle="Shown once. Copy them now and send to the person securely." width={560}
+        footer={<Btn variant="accent" size="sm" icon="check" onClick={onClose}>Done</Btn>}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {[["Sign-in page", "https://erp.jewonline.in/app/realty-crm"], ["Login id", done.email], ["Temporary password", done.password]].map(([k, v]) => (
+            <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--neutral-50)" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="dux-eyebrow" style={{ fontSize: 9 }}>{k}</div>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 600, wordBreak: "break-all" }}>{v}</div>
+              </div>
+              <Btn variant="soft" size="sm" onClick={() => copyText(v)}>Copy</Btn>
+            </div>
+          ))}
+          <div style={{ fontSize: 12, color: "var(--neutral-600)" }}>Ask them to change the password after their first sign-in.</div>
+        </div>
+      </Modal>
+    );
+  }
+  return (
+    <Modal open={open} onClose={onClose} eyebrow="USERS & ACCESS" title="Add a login"
+      subtitle="Creates an ERPNext login for this person and registers it with the CRM." width={620}
+      footer={<>
+        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Creating…" : "Create login"}</Btn>
+      </>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Full name" required span={2}><Input autoFocus placeholder="e.g. Aniruddha Mahakulkar" value={form.full_name} onChange={(e) => u("full_name", e.target.value)} /></Field>
+        <Field label="Email (login id)" required span={2}><Input type="email" placeholder="name@shradharealty.in" value={form.email} onChange={(e) => u("email", e.target.value)} /></Field>
+        <Field label="Access level" span={2}>
+          <Select value={form.role} onChange={(e) => u("role", e.target.value)}>
+            {LOGIN_ROLE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </Select>
+        </Field>
+        <Field label="Link to sales rep" span={2} hint="So their holds and leads are attributed to them">
+          <Select value={form.sales_owner} onChange={(e) => u("sales_owner", e.target.value)}>
+            <option value="">— none —</option>
+            {(data.owners || []).map(o => <option key={o.id} value={o.name}>{o.name} · {o.role}</option>)}
+          </Select>
+        </Field>
+        <Field label="Temporary password" span={2} hint="Minimum 10 characters. They should change it after signing in.">
+          <div style={{ display: "flex", gap: 8 }}>
+            <Input value={form.password} onChange={(e) => u("password", e.target.value)} style={{ fontFamily: "var(--font-mono)" }} />
+            <Btn variant="soft" size="sm" onClick={() => u("password", genPassword())}>Regenerate</Btn>
+          </div>
+        </Field>
+      </div>
+    </Modal>
+  );
+};
+
+window.SetPasswordModal = function SetPasswordModal({ user, onClose, onSaved }) {
+  const [pwd, setPwd] = useStateF("");
+  const [busy, setBusy] = useStateF(false);
+  const [done, setDone] = useStateF(false);
+  useEffectF(() => { if (user) { setPwd(genPassword()); setBusy(false); setDone(false); } }, [user]);
+  if (!user) return null;
+  const save = async () => {
+    if ((pwd || "").length < 10) { frappe.msgprint("Password must be at least 10 characters."); return; }
+    setBusy(true);
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.set_crm_user_password", args: { email: user.email, password: pwd } });
+      setDone(true);
+      onSaved && await onSaved();
+    } catch (e) { frappe.msgprint(e.message || "Could not set the password"); setBusy(false); }
+  };
+  return (
+    <Modal open={!!user} onClose={onClose} eyebrow="RESET PASSWORD" title={"Set a password for " + user.name}
+      subtitle={user.email} width={520}
+      footer={done
+        ? <Btn variant="accent" size="sm" icon="check" onClick={onClose}>Done</Btn>
+        : <><Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+            <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Saving…" : "Set password"}</Btn></>}>
+      {done ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--neutral-50)" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="dux-eyebrow" style={{ fontSize: 9 }}>New password — copy it now</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 700 }}>{pwd}</div>
+          </div>
+          <Btn variant="soft" size="sm" onClick={() => copyText(pwd)}>Copy</Btn>
+        </div>
+      ) : (
+        <Field label="New password" hint="Minimum 10 characters. Share it securely; they should change it after signing in.">
+          <div style={{ display: "flex", gap: 8 }}>
+            <Input value={pwd} onChange={(e) => setPwd(e.target.value)} style={{ fontFamily: "var(--font-mono)" }} />
+            <Btn variant="soft" size="sm" onClick={() => setPwd(genPassword())}>Regenerate</Btn>
+          </div>
+        </Field>
+      )}
+    </Modal>
+  );
+};
+
 // ---------- Hold / Reserve request modal (inventory) ----------
 window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initialKind, onSaved }) {
   const data = window.CRM_DATA;

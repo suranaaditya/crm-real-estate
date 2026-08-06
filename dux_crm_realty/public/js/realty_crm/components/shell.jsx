@@ -149,6 +149,13 @@ window.ScoreChip = function ScoreChip({ score }) {
   );
 };
 
+// The signed-in person (never a hardcoded persona).
+window._me = function _me() {
+  const cu = (window.CRM_DATA && window.CRM_DATA.currentUser) || {};
+  const name = cu.name || "User";
+  return { name, role: cu.role || "", initials: cu.initials || name.split(" ").filter(Boolean).map(w => w[0]).join("").slice(0, 2).toUpperCase() };
+};
+
 // ---------- Sidebar (shared) ----------
 window.Sidebar = function Sidebar({ active = "leads", compact = false, onNav }) {
   const cu = (window.CRM_DATA && window.CRM_DATA.currentUser) || {};
@@ -229,11 +236,11 @@ window.Sidebar = function Sidebar({ active = "leads", compact = false, onNav }) 
         borderTop: "1px solid rgba(255,255,255,0.06)",
         display: "flex", alignItems: "center", gap: 10,
       }}>
-        <Avatar name="Priya Deshmukh" initials="PD" size={32} />
+        <Avatar name={_me().name} initials={_me().initials} size={32} />
         {!compact && (
-          <div style={{ lineHeight: 1.2, flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-display)" }}>Priya Deshmukh</div>
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>Sales Executive</div>
+          <div style={{ lineHeight: 1.2, flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-display)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{_me().name}</div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{_me().role || "Team member"}</div>
           </div>
         )}
         {!compact && <Icon name="settings" size={16} style={{ color: "rgba(255,255,255,0.55)" }} />}

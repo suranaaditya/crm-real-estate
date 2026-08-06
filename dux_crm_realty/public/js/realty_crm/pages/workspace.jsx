@@ -4,15 +4,33 @@ import React from "react";
 
 const { useState: wUseState } = React;
 
+/* Deep links: the module lives in the URL hash (#leads, #inventory…) so a refresh
+   keeps you where you were and a link can point at a specific module. Frappe v16
+   routes on the path, not the hash, so this doesn't fight the desk router. */
+const PAGE_IDS = ["dashboard", "calendar", "approvals", "leads", "visits", "documents",
+  "inventory", "bookings", "payments", "partners", "campaigns", "reports", "settings"];
+const _hashPage = () => {
+  const h = (window.location.hash || "").replace(/^#/, "").trim().toLowerCase();
+  return PAGE_IDS.includes(h) ? h : null;
+};
+
 window.Workspace = function Workspace({ density = "comfortable", defaultView = "table", initial = "leads" }) {
-  const [activePage, setActivePage] = wUseState(initial);
+  const [activePage, setActivePage] = wUseState(_hashPage() || initial);
   const [invSearch, setInvSearch] = wUseState("");   // Inventory top-bar search
   const [docSearch, setDocSearch] = wUseState("");   // Documents top-bar search
-  const onNav = (id) => { setActivePage(id); setInvSearch(""); setDocSearch(""); };
+  const onNav = (id) => {
+    setActivePage(id); setInvSearch(""); setDocSearch("");
+    try { window.location.hash = id; } catch (e) {}
+  };
+  React.useEffect(() => {
+    const onHash = () => { const p = _hashPage(); if (p) setActivePage(p); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   // Pages that bring their own topbar / chrome
   const pageMeta = {
-    dashboard: { title: "Dashboard",      subtitle: "GOOD MORNING, PRIYA" },
+    dashboard: { title: "Dashboard",      subtitle: ("WELCOME BACK, " + String((window.CRM_DATA && window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.name) || "").split(" ")[0].toUpperCase()) },
     calendar:  { title: "My Day",         subtitle: "TASKS & VISITS · MY CALENDAR" },
     approvals: { title: "Approvals",      subtitle: "MANAGER · PENDING REQUESTS" },
     leads:     { title: "Leads",          subtitle: "SALES PIPELINE" },

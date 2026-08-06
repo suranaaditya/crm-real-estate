@@ -56,7 +56,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-06 23:40:08.052264",
+ "modified": "2026-08-07 01:26:14.700984",
  "modified_by": "Administrator",
  "module": "Dux CRM Realty",
  "name": "Realty Sales Owner",
@@ -99,28 +99,16 @@
    "write": 1
   },
   {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Realty Sales Executive",
-   "share": 1,
-   "write": 1
+   "role": "Realty Sales Executive"
   },
   {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "Realty Finance",
-   "share": 1,
-   "write": 1
+   "role": "Realty Finance"
   }
  ],
  "row_format": "Dynamic",

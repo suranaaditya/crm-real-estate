@@ -11,3 +11,7 @@ public/dist/
 *~
 .idea/
 .vscode/
+
+# Real client data (PII) — never commit
+client-data/
+client-deliverables/

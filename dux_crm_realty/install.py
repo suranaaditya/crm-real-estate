@@ -157,7 +157,11 @@ def create_doctypes():
 		# session->rep mapping for hold attribution (blank until reps get Frappe logins)
 		f("user", "Link", "User", options="User"),
 		f("phone", "Data", "Phone"),
-	])
+	# BLOCKER FIX: `user` decides whose identity a session resolves to
+	# (_actor_owner). If sales executives can write this doctype, any of them can
+	# point a rep row at their own login and inherit that rep's holds/leads.
+	# Managers/admins write; everyone else reads.
+	], perms=_perms(exec_write=False))
 
 	# child table that links a master (Sales Owner) — created after it exists
 	make_doctype("Realty Lead Task", istable=1, fields=[
@@ -374,6 +378,31 @@ def create_doctypes():
 		f("lead", "Link", "Lead", options="Realty Lead"),
 		f("lead_name", "Data", "Lead Name", fetch_from="lead.lead_name", read_only=1),
 		f("notes", "Small Text", "Notes"),
+	])
+
+	# ---- CRM login registry (the ALLOWLIST that bounds user management) ----
+	# Membership is EXPLICIT: only logins listed here can be managed from the app.
+	# Never derived from "holds a Realty role" — this is a shared server and other
+	# people's accounts must stay invisible and untouchable.
+	make_doctype("Realty CRM User", autoname="field:user", title_field="user",
+		search_fields="user,full_name", fields=[
+		f("user", "Link", "Login (User)", options="User", reqd=1, unique=1, in_list_view=1),
+		f("full_name", "Data", "Full Name", in_list_view=1),
+		f("crm_role", "Select", "CRM Role", in_list_view=1, default="Realty Sales Executive",
+			options="Realty Sales Executive\nRealty Sales Manager\nRealty Finance\nRealty Admin"),
+		f("sales_owner", "Link", "Sales Rep", options="Realty Sales Owner"),
+		f("col_break_cu", "Column Break"),
+		f("status", "Select", "Status", options="Active\nDisabled", default="Active", in_list_view=1),
+		f("created_by_crm", "Check", "Created by CRM"),
+		f("password_set_on", "Datetime", "Password Last Set On", read_only=1),
+		f("password_set_by", "Data", "Password Last Set By", read_only=1),
+		f("notes", "Small Text", "Notes"),
+	], perms=[
+		# BLOCKER FIX: the allowlist must NOT be writable by the role it bounds.
+		# Realty Admin manages logins only through the whitelisted endpoints (which
+		# use ignore_permissions); direct desk write would let them add themselves.
+		{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
+		{"role": "Realty Admin", "read": 1},
 	])
 
 	# ---- unit hold / reserve ledger (audit log; one record per request) ----
