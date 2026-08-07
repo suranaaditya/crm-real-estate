@@ -10,8 +10,15 @@ window.PagePayments = function PagePayments() {
   const due = dues.filter(d => d.status === "due");
   const scheduled = dues.filter(d => d.status === "scheduled");
   const paid = dues.filter(d => d.status === "paid");
-  const totalCollected = paid.reduce((a, d) => a + d.amount, 0);
-  const totalOutstanding = [...overdue, ...due, ...scheduled].reduce((a, d) => a + d.amount, 0);
+  const totalCollected = paid.reduce((a, d) => a + (d.amount || 0), 0);
+  const totalOutstanding = [...overdue, ...due, ...scheduled].reduce((a, d) => a + (d.amount || 0), 0);
+
+  // Days-past-due, averaged over what is actually overdue (was hardcoded "14 days").
+  const dpd = overdue
+    .map(d => d.dueDate ? Math.floor((new Date(data.today) - new Date(d.dueDate)) / 86400000) : null)
+    .filter(n => n !== null && n >= 0);
+  const avgDpd = dpd.length
+    ? Math.round(dpd.reduce((a, n) => a + n, 0) / dpd.length) + " days" : "—";
 
   const statusTone = {
     overdue:   { bg: "var(--error-bg)",       fg: "var(--error)",         label: "Overdue" },
@@ -28,10 +35,10 @@ window.PagePayments = function PagePayments() {
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--hairline)", background: "var(--bg)" }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
-          <StatCard label="COLLECTED THIS QTR" value={fmtINR(totalCollected)} delta="+18% YoY" icon="rupee" />
+          <StatCard label="COLLECTED" value={fmtINR(totalCollected)} delta={paid.length + " receipts"} icon="rupee" />
           <StatCard label="OUTSTANDING" value={fmtINR(totalOutstanding)} delta={(overdue.length + due.length) + " active"} icon="money" />
-          <StatCard label="OVERDUE" value={fmtINR(overdue.reduce((a, d) => a + d.amount, 0))} delta={overdue.length + " accounts"} deltaTone="down" icon="x" />
-          <StatCard label="DPD AVERAGE" value="14 days" delta="-3 vs Q4" icon="chart" />
+          <StatCard label="OVERDUE" value={fmtINR(overdue.reduce((a, d) => a + (d.amount || 0), 0))} delta={overdue.length + " accounts"} deltaTone="down" icon="x" />
+          <StatCard label="DPD AVERAGE" value={avgDpd} delta={overdue.length ? overdue.length + " overdue sampled" : "nothing overdue"} icon="chart" />
         </div>
       </div>
 
@@ -84,7 +91,8 @@ window.PagePayments = function PagePayments() {
               {visible.map(d => {
                 const tone = statusTone[d.status] || statusTone.scheduled;
                 const dpd = d.status === "overdue" ? Math.floor((today - new Date(d.dueDate)) / 86400000) : 0;
-                const initials = d.leadName.split(" ").map(w => w[0]).join("").slice(0, 2);
+                // leadName is nullable on a due whose booking lost its lead link
+                const initials = String(d.leadName || "?").split(" ").map(w => w[0] || "").join("").slice(0, 2);
                 return (
                   <tr key={d.id} style={{ borderTop: "1px solid var(--hairline)" }}>
                     <td style={{ padding: "12px 16px" }}>
@@ -115,7 +123,7 @@ window.PagePayments = function PagePayments() {
                     </td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }}>
                       <Btn variant="ghost" size="sm" onClick={async () => {
-                        if (d.status === "paid") { frappe.show_alert("Receipt " + (d.receiptNo || "—") + " · " + d.leadName); return; }
+                        if (d.status === "paid") { frappe.show_alert("Receipt " + esc(d.receiptNo || "—") + " · " + esc(d.leadName)); return; }
                         try {
                           const r = await frappe.call({ method: "dux_crm_realty.api.crm.send_reminder", args: { due_id: d.id } });
                           frappe.show_alert({ message: r.message.message, indicator: "blue" });

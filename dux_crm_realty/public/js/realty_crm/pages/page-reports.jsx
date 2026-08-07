@@ -4,27 +4,61 @@ import React from "react";
 window.PageReports = function PageReports() {
   const data = window.CRM_DATA;
 
-  // Source breakdown
+  // Source breakdown. A lead with no source would key the object as the STRING "null" and
+  // render a legend row literally labelled "null" — bucket those as "Not set".
   const sourceCounts = {};
-  data.leads.forEach(l => { sourceCounts[l.source] = (sourceCounts[l.source] || 0) + 1; });
+  data.leads.forEach(l => {
+    const k = l.source || "Not set";
+    sourceCounts[k] = (sourceCounts[k] || 0) + 1;
+  });
   const sourceTotal = Object.values(sourceCounts).reduce((a, b) => a + b, 0);
+  // ONE ordering shared by the donut and its legend — they used to iterate different
+  // orders (unsorted vs sorted), so 9 of 12 legend swatches named the wrong arc.
+  const sourceRows = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]);
   const sourcePalette = ["#244C5A", "#E8A95B", "#568A4F", "#B5462C", "#8564A8", "#5C6B73"];
 
-  // Monthly trend (mock 6 months)
-  const months = [
-    { m: "Nov", visits: 42, bookings: 4 },
-    { m: "Dec", visits: 38, bookings: 3 },
-    { m: "Jan", visits: 51, bookings: 5 },
-    { m: "Feb", visits: 47, bookings: 6 },
-    { m: "Mar", visits: 62, bookings: 7 },
-    { m: "Apr", visits: 56, bookings: 8 },
-  ];
-  const maxV = Math.max(...months.map(m => m.visits));
+  // Monthly trend — the trailing 6 months ending at "today", computed from real visits and
+  // bookings. (This was a hardcoded mock array that showed ~296 visits against 32 real ones.)
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const anchor = new Date(data.today + "T00:00:00");
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+    const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    months.push({
+      m: MON[d.getMonth()], key,
+      visits: data.visits.filter(v => (v.date || "").slice(0, 7) === key).length,
+      bookings: data.bookings.filter(b => (b.date || "").slice(0, 7) === key).length,
+    });
+  }
+  // one shared scale for both series (the old code amplified bookings 4x, which made the
+  // two bars incomparable); floor at 1 so an all-zero window can't divide by zero
+  const maxV = Math.max(1, ...months.map(m => Math.max(m.visits, m.bookings)));
+
+  // Lead -> booking conversion, same definition the Leads page and Dashboard use.
+  const bookedLeads = data.leads.filter(l => l.stage === "booked").length;
+  const leadToBooking = data.leads.length
+    ? ((bookedLeads / data.leads.length) * 100).toFixed(1) + "%" : "—";
+
+  // Average sales cycle = booking date - lead creation, over bookings that still carry a
+  // lead link. Shows "—" rather than inventing a number when nothing is measurable.
+  const leadCreated = {};
+  data.leads.forEach(l => { if (l.created) leadCreated[l.id] = l.created; });
+  const cycles = data.bookings
+    .map(b => {
+      const c = leadCreated[b.leadId];
+      if (!c || !b.date) return null;
+      const days = (new Date(b.date) - new Date(c)) / 86400000;
+      return days >= 0 ? days : null;
+    })
+    .filter(d => d !== null);
+  const avgCycle = cycles.length
+    ? Math.round(cycles.reduce((a, d) => a + d, 0) / cycles.length) + " days" : "—";
 
   // Sales by project
   const byProject = data.projects.map(p => ({
     name: p.code, label: p.name, sold: p.sold, total: p.totalUnits,
-    revenue: p.sold * (p.priceFrom + p.priceTo) / 2,
+    revenue: p.sold * ((p.priceFrom || 0) + (p.priceTo || 0)) / 2,
   }));
 
   return (
@@ -40,10 +74,10 @@ window.PageReports = function PageReports() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
-        <StatCard label="GROSS BOOKINGS" value={fmtINR(data.bookings.reduce((a, b) => a + b.bsp, 0))} delta="+34% YoY" icon="rupee" />
-        <StatCard label="UNITS SOLD" value={data.projects.reduce((a, p) => a + p.sold, 0)} delta="+12 this month" icon="building" />
-        <StatCard label="LEAD → BOOKING" value="14.2%" delta="+2.1 pp" icon="chart" />
-        <StatCard label="AVG. SALES CYCLE" value="38 days" delta="-4 days" icon="calendar" />
+        <StatCard label="GROSS BOOKINGS" value={fmtINR(data.bookings.reduce((a, b) => a + (b.bsp || 0), 0))} delta={data.bookings.length + " bookings"} icon="rupee" />
+        <StatCard label="UNITS SOLD" value={data.projects.reduce((a, p) => a + (p.sold || 0), 0)} delta={data.projects.reduce((a, p) => a + (p.totalUnits || 0), 0) + " total units"} icon="building" />
+        <StatCard label="LEAD → BOOKING" value={leadToBooking} delta={bookedLeads + " of " + data.leads.length} icon="chart" />
+        <StatCard label="AVG. SALES CYCLE" value={avgCycle} delta={cycles.length ? cycles.length + " bookings sampled" : "no linked bookings"} icon="calendar" />
       </div>
 
       {/* Trend chart */}
@@ -51,7 +85,7 @@ window.PageReports = function PageReports() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 24, alignItems: "flex-end", padding: "20px 8px 8px", height: 240 }}>
           {months.map(m => {
             const vh = (m.visits / maxV) * 180;
-            const bh = (m.bookings / maxV) * 180 * 4; // amplify
+            const bh = (m.bookings / maxV) * 180;
             return (
               <div key={m.m} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 180 }}>
@@ -77,9 +111,9 @@ window.PageReports = function PageReports() {
         {/* Source breakdown */}
         <Panel title="Lead sources" subtitle="Q1 FY26">
           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 24, alignItems: "center" }}>
-            <DonutChart data={Object.entries(sourceCounts).map(([k, v], i) => ({ label: k, value: v, color: sourcePalette[i % sourcePalette.length] }))} total={sourceTotal} />
+            <DonutChart data={sourceRows.map(([k, v], i) => ({ label: k, value: v, color: sourcePalette[i % sourcePalette.length] }))} total={sourceTotal} />
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).map(([k, v], i) => (
+              {sourceRows.map(([k, v], i) => (
                 <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 2, background: sourcePalette[i % sourcePalette.length] }} />
                   <span style={{ flex: 1 }}>{k}</span>
@@ -95,7 +129,10 @@ window.PageReports = function PageReports() {
         <Panel title="Sales velocity by project" subtitle="UNITS SOLD">
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {byProject.map(p => {
-              const pct = (p.sold / p.total) * 100;
+              // 0/0 => NaN => width:"NaN%" is invalid CSS, the browser drops the
+              // declaration and the bar renders FULL — i.e. an unbuilt project read as
+              // 100% sold. Same guard the dashboard already had.
+              const pct = p.total ? (p.sold / p.total) * 100 : 0;
               return (
                 <div key={p.name}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12 }}>

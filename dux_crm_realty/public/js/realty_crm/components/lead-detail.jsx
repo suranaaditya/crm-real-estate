@@ -43,7 +43,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.reassign_lead", args: { lead: lead.id, owner: o || "" } });
       if (r.message && r.message.activities) setActivities(r.message.activities);
-      frappe.show_alert({ message: o ? ("Assigned to " + o) : "Unassigned", indicator: "green" });
+      frappe.show_alert({ message: o ? ("Assigned to " + esc(o)) : "Unassigned", indicator: "green" });
       refreshList();
     } catch (e) { frappe.msgprint(e.message || "Could not reassign"); }
   };
@@ -332,7 +332,7 @@ function EmailComposerModal({ open, onClose, lead, onLogged }) {
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.send_email", args: { payload: {
         lead: lead.id, to: to.trim(), subject: subject.trim(), body, account, attachments: attach } } });
-      frappe.show_alert({ message: "Email sent to " + r.message.to, indicator: "green" });
+      frappe.show_alert({ message: "Email sent to " + esc(r.message.to), indicator: "green" });
       if (r.message && r.message.activities) onLogged(r.message.activities);
       onClose();
     } catch (e) { frappe.msgprint(e.message || "Could not send the email"); setBusy(""); }
@@ -679,7 +679,9 @@ function DocsTab({ lead }) {
                   )}
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                  <button onClick={() => setEditDoc(d)} title="Edit / rename / delete" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="edit" size={14} /></button>
+                  {/* mirrors update_document's gate — uploader or manager only */}
+                  {(isManager || d.uploadedBy === me) &&
+                    <button onClick={() => setEditDoc(d)} title="Edit / rename / delete" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="edit" size={14} /></button>}
                   <button onClick={() => downloadDocument(d.id)} title="Download" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="download" size={14} /></button>
                 </div>
               </div>
@@ -714,7 +716,8 @@ function DocsTab({ lead }) {
                 {!share && !d.shareable && (
                   <>
                     <span style={{ fontSize: 12, color: "var(--neutral-400)" }}>Not shareable.</span>
-                    <Btn variant="outline" size="sm" icon="link" onClick={() => act("update_document", { document: d.id, shareable: 1 }, "Marked shareable", "green")}>Make shareable</Btn>
+                    {(isManager || d.uploadedBy === me) &&
+                      <Btn variant="outline" size="sm" icon="link" onClick={() => act("update_document", { document: d.id, shareable: 1 }, "Marked shareable", "green")}>Make shareable</Btn>}
                   </>
                 )}
                 <div style={{ flex: 1 }} />
@@ -784,17 +787,24 @@ window.ShareHistoryModal = function ShareHistoryModal({ history, onClose }) {
 };
 
 function PricingTab({ lead }) {
-  const rows = (lead.costSheet && lead.costSheet.length)
-    ? lead.costSheet.map(r => [r.label, r.amount])
-    : [
-      ["Base price (Unit B-705, 1145 sqft)", 7920000],
-      ["Floor rise (7th floor @ ₹50/sqft)",   57250],
-      ["East-facing premium",                  68700],
-      ["Covered parking (2 slots)",           300000],
-      ["Club membership",                      75000],
-      ["Negotiated discount",                -202000],
-    ];
-  const subtotal = rows.reduce((a, [, v]) => a + v, 0);
+  // NO placeholder fallback. This used to fall back to an invented cost sheet ("Unit B-705,
+  // 1145 sqft", base price 79,20,000, floor rise, east-facing premium…). Realty Cost Sheet
+  // Item has zero rows site-wide, so EVERY one of the 853 real client leads rendered that
+  // same fabricated quotation — numbers a rep could have read out to a customer.
+  const rows = (lead.costSheet || []).map(r => [r.label, r.amount]);
+  if (!rows.length) {
+    return (
+      <div style={{ padding: "28px 4px", textAlign: "center", color: "var(--neutral-400)" }}>
+        <Icon name="rupee" size={22} style={{ opacity: 0.5 }} />
+        <div style={{ fontSize: 13, marginTop: 10, color: "var(--neutral-600)", fontWeight: 600 }}>No cost sheet yet</div>
+        <div style={{ fontSize: 12, marginTop: 4 }}>
+          Cost-sheet generation isn’t built yet — prepare the quotation outside the CRM and
+          upload it on the Documents tab.
+        </div>
+      </div>
+    );
+  }
+  const subtotal = rows.reduce((a, [, v]) => a + (v || 0), 0);
   const gst = Math.round(subtotal * 0.05);
   const stamp = Math.round(subtotal * 0.06);
   const total = subtotal + gst + stamp;

@@ -59,6 +59,38 @@ def _perms(extra_full=None, exec_write=True, finance_write=False):
 	return rows
 
 
+def _ledger_perms(exec_create=False, manager_write=False):
+	"""Permissions for doctypes whose writes must ONLY happen through the whitelisted API.
+
+	Frappe's generic REST API (/api/resource/<doctype>/<name>) honours DocPerms, NOT the
+	role checks inside api/crm.py. With write granted to Realty Sales Executive, a rep who
+	was refused by approve_share could simply PUT status=Approved with a share_key of their
+	choosing and publish any private client document to an anonymous URL — the whole
+	manager-approval model was bypassable. Every write to these doctypes in api/crm.py uses
+	ignore_permissions=True, so removing direct write costs nothing functionally.
+
+	``exec_create`` is for Realty Document only: upload_document deliberately checks
+	frappe.has_permission("Realty Document", "create") so reps can still upload.
+	"""
+	full = {
+		"read": 1, "write": 1, "create": 1, "delete": 1,
+		"report": 1, "export": 1, "print": 1, "email": 1, "share": 1,
+	}
+	ro = {"read": 1, "report": 1}
+	mgr = dict(full) if manager_write else dict(ro)
+	rows = [
+		{"role": "System Manager", **full},
+		{"role": "Realty Admin", **full},
+		{"role": "Realty Sales Manager", **mgr},
+		{"role": "Realty Sales Executive", **ro},
+		{"role": "Realty Finance", **ro},
+	]
+	if exec_create:
+		rows[3] = {"role": "Realty Sales Executive", "read": 1, "create": 1, "report": 1,
+			"export": 1, "print": 1, "email": 1, "share": 1}
+	return rows
+
+
 def make_doctype(name, fields, autoname=None, istable=0, title_field=None,
 		search_fields=None, perms=None, allow_rename=1):
 	if frappe.db.exists("DocType", name):
@@ -223,7 +255,7 @@ def create_doctypes():
 		f("sec_break_img", "Section Break", "Imagery"),
 		f("facade_image", "Attach Image", "Facade Image"),
 		f("aerial_image", "Attach Image", "Aerial Image"),
-	])
+	], perms=_ledger_perms(manager_write=True))
 
 	make_doctype("Realty Unit", autoname="field:unit_id",
 		search_fields="project,tower,typology", fields=[
@@ -238,7 +270,7 @@ def create_doctypes():
 		f("facing", "Select", "Facing", options="East\nWest\nNorth\nSouth"),
 		f("price", "Currency", "Price", in_list_view=1),
 		f("status", "Select", "Status", options="Available\nBlocked\nReserved\nSold", in_list_view=1, default="Available"),
-	])
+	], perms=_ledger_perms(manager_write=True))
 
 	# ---- lead ----
 	make_doctype("Realty Lead", autoname="field:lead_id",
@@ -430,7 +462,7 @@ def create_doctypes():
 		f("closed_by", "Data", "Closed By"),
 		f("closed_on", "Datetime", "Closed On"),
 		f("close_reason", "Data", "Close Reason"),
-	])
+	], perms=_ledger_perms())
 
 	# ---- DMS: stored document (one row per uploaded file) ----
 	# File lives as a PRIVATE Frappe File attached to this doc (attached_to_doctype/name);
@@ -463,7 +495,7 @@ def create_doctypes():
 		f("uploaded_by", "Data", "Uploaded By"),
 		f("uploaded_on", "Datetime", "Uploaded On"),
 		f("notes", "Small Text", "Notes"),
-	])
+	], perms=_ledger_perms(exec_create=True, manager_write=True))
 
 	# ---- DMS: document share ledger (one row per share request; mirrors Realty Unit Hold) ----
 	# State machine: Requested -> Approved (key minted, link live) -> Rejected/Revoked/Expired.
@@ -494,7 +526,7 @@ def create_doctypes():
 		f("closed_by", "Data", "Closed By"),
 		f("closed_on", "Datetime", "Closed On"),
 		f("close_reason", "Data", "Close Reason"),
-	])
+	], perms=_ledger_perms())
 
 	# ---- Email: per-user sending account (SMTP). The smtp_password is a Password field
 	# (encrypted in the __Auth table). This is SELF-CONTAINED — sending uses smtplib with

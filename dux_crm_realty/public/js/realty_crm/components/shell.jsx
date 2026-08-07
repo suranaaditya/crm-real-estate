@@ -5,6 +5,13 @@ import React from "react";
 const { useState, useEffect, useMemo, useRef } = React;
 
 // ---------- Formatters ----------
+// frappe.show_alert / msgprint render their message as RAW HTML, so any record field
+// interpolated into one is an injection sink (React's escaping does not apply there).
+// Wrap user-controlled values in esc() at every such call site.
+window.esc = (s) => String(s == null ? "" : s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
 window.fmtINR = (n) => {
   if (n == null) return "—";
   if (n >= 10000000) return "₹ " + (n / 10000000).toFixed(2).replace(/\.00$/, "") + " Cr";

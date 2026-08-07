@@ -150,7 +150,7 @@ window.PageBookings = function PageBookings() {
                   <Avatar name={booking.leadName} initials={booking.leadName.split(" ").map(w => w[0]).join("").slice(0,2)} size={44} />
                   <div>
                     <div style={{ fontSize: 14, fontWeight: 600 }}>{booking.leadName}</div>
-                    <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>Lead {booking.leadId} · Booked {fmtDate(booking.date)}</div>
+                    <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{[booking.leadId ? "Lead " + booking.leadId : null, "Booked " + fmtDate(booking.date)].filter(Boolean).join(" · ")}</div>
                   </div>
                 </div>
                 <div style={{ fontSize: 12, color: "var(--neutral-600)", lineHeight: 1.6 }}>

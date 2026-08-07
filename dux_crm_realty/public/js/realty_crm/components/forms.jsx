@@ -649,7 +649,7 @@ window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
     setBusy(true);
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.create_rep", args: { payload: form } });
-      frappe.show_alert({ message: form.full_name + " added" + (r.message.login ? " · login " + r.message.login : ""), indicator: "green" });
+      frappe.show_alert({ message: esc(form.full_name) + " added" + (r.message.login ? " · login " + esc(r.message.login) : ""), indicator: "green" });
       onSaved && await onSaved();
       onClose();
     } catch (e) { frappe.msgprint(e.message || "Could not add member"); setBusy(false); }
@@ -981,10 +981,20 @@ window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initi
 window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaultOwner, onSaved }) {
   const data = window.CRM_DATA;
   const TYPES = ["Follow-up call", "WhatsApp", "Email", "Site visit", "Send documents", "Collect documents", "Payment follow-up", "Meeting", "Other"];
+  // assigned_to is a Link to Realty Sales Owner. Defaulting to currentUser.name broke for
+  // any login that is not itself a rep (a manager/director): create_task then failed with
+  // a raw "Could not find Assigned To: Vinita Aswani". Only pre-select a name that really
+  // is a rep; otherwise leave it blank and let them choose.
+  const meIsRep = (nm) => (data.owners || []).some(o => o.name === nm);
+  const defaultAssignee = () => {
+    if (defaultOwner && meIsRep(defaultOwner)) return defaultOwner;
+    const me = (data.currentUser && data.currentUser.name) || "";
+    return meIsRep(me) ? me : "";
+  };
   const init = () => ({
     title: "", type: "Follow-up call", date: defaultDate || (data.today || ""),
     time: "10:00", priority: "med",
-    assignedTo: defaultOwner || (data.currentUser && data.currentUser.name) || "",
+    assignedTo: defaultAssignee(),
     lead: "", notes: "",
   });
   const [form, setForm] = useStateF(init);

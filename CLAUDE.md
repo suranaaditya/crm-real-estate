@@ -247,6 +247,42 @@ doctypes, so it won't apply field/option changes to a live site).
 - **Python `_` gotcha (bit us once):** never use bare `_` as a throwaway (`a, _, b = x.partition(...)`) in a
   function that also calls `_()` (gettext) — it makes `_` a function-local and every `_("...")` then raises
   `UnboundLocalError`. Use `_sep`/`_x`. (List-comprehension `for _ in ...` is safe — own scope.)
+- **Human ids (`LD-`, `HLD-`, `SHR-`, `DOC-`, `TSK-`, `VST-`, `RCP-`) come from an ATOMIC
+  counter now.** `_next_id` used to be `max(...)+1` with no lock: 3 of 6 concurrent
+  `create_lead` calls died on the unique index — i.e. **lost leads**. It now seeds Frappe's
+  `tabSeries` (key `RLTY-<prefix>`) from the existing max and increments it with
+  `INSERT … ON DUPLICATE KEY UPDATE current = current + 1`. 10/10 concurrent captures now
+  succeed. `GREATEST()` on the seed means the counter never goes backwards, which also stops a
+  deleted `DOC-0008` from being reissued to a different document later (both DMS ledgers set
+  `allow_rename=0` precisely because the id is an immutable audit identity).
+  `_insert_with_id()` wraps insert-with-retry as a backstop.
+- **A rep's UI must never show a control the server will refuse** — see the Security model
+  section. And **`_actor_owner()` vs `currentUser.name`**: the JS side compares
+  `d.uploadedBy === data.currentUser.name`, which is the same string `_actor_owner()` returns.
+- **Not every login is a rep.** `Vinita Aswani` (Sales Manager) and the director login are NOT
+  `Realty Sales Owner` rows. Anything that defaults a rep-valued field to
+  `currentUser.name` breaks for them: the My Day calendar rendered **permanently empty**
+  (the owner `<select>` had no matching option) and "New task" failed with a raw
+  `Could not find Assigned To: Vinita Aswani`. Guard with
+  `(data.owners || []).some(o => o.name === meName)` and fall back to the team view / blank.
+- **Frappe only checks `User.enabled` when a session is CREATED** (`sessions.py`
+  `validate_user()` runs in the non-resume branch only). Disabling a login therefore did NOT
+  log it out — with `session_expiry = 240:00` (ten days) a disabled user kept full access.
+  `set_crm_user_status` now calls `frappe.sessions.clear_sessions(email, force=True)`.
+- **`User.add_roles()` / `remove_roles()` end in a bare `self.save()`**, so they run under the
+  CALLER's permissions. A Realty Admin has no write on the core `User` doctype, so
+  `set_crm_user_role` 403'd for every real client admin. Mutate `u.roles` directly and
+  `u.save(ignore_permissions=True)` (as `create_crm_user` / `set_crm_user_password` already did).
+- **Don't invent numbers on a client-facing screen.** The prototype's placeholder KPIs survived
+  into production and were being read as real analytics: a hardcoded `"14.2%"` conversion on
+  both Dashboard and Reports (the Leads page computed the true 0.0% right beside it), a
+  `"38 days"` sales cycle, a `"14 days"` DPD, and a **six-month trend chart of 296 fabricated
+  visits when the database held 32**. All now computed, or `"—"` when not computable.
+- **`width: NaN%` is invalid CSS, so the browser DROPS the declaration and the bar renders
+  FULL.** `(p.sold / p.total) * 100` with `total = 0` made every unbuilt project read as
+  **100% sold** on Reports. This is the same class as the already-fixed dashboard `soldPct`;
+  when you fix one divide-by-zero, grep for the others (`page-reports.jsx`,
+  `page-dashboard.jsx` funnel `Math.max(...)`).
 - **Hold attribution identity is a known, documented limitation.** Actor identity comes from
   `_actor_owner()` (maps `frappe.session.user` → the `Realty Sales Owner.user` link, else falls back to
   the pinned persona). With ONE shared login (and reps not yet having Frappe Users) every actor
@@ -305,6 +341,55 @@ must stay invisible). Endpoints: `list_crm_users`, `create_crm_user`,
 - Modules are deep-linkable via the URL hash (`#leads`, `#inventory`) — also how the
   PDF screenshots are captured headlessly.
 
+## Security model — read before touching permissions (E2E audit, 07 Aug 2026)
+
+**The whitelisted-API role checks are NOT the only door.** Frappe's generic REST API
+(`/api/resource/<DocType>/<name>`) honours **DocPerms**, not the `_is_manager()` checks inside
+`api/crm.py`. While `Realty Sales Executive` held `write` on the ledgers, a rep refused by
+`approve_share` could simply
+`PUT /api/resource/Realty Document Share/SHR-0006 {"status":"Approved","share_key":"<their own>"}`
+and then hand an **anonymous** URL to any private client document. This was reproduced
+end-to-end and is now closed.
+
+Rule: **any doctype whose writes are supposed to flow through a gated endpoint must not grant
+`write` to the roles that endpoint refuses.** Current matrix (see `_ledger_perms()` in
+`install.py`, mirrored in each doctype JSON):
+
+| DocType | SysMgr | Realty Admin | Sales Manager | Sales Executive | Finance |
+|---|---|---|---|---|---|
+| Realty Document Share | full | full | read | read | read |
+| Realty Unit Hold | full | full | read | read | read |
+| Realty Document | full | full | r+w+c | **r+c** (upload) | read |
+| Realty Unit | full | full | full | read | read |
+| Realty Project | full | full | full | read | read |
+
+Every write to these in `api/crm.py` uses `ignore_permissions=True`, so this costs nothing
+functionally. `Realty Document` keeps `create` for reps because `upload_document` deliberately
+checks `frappe.has_permission("Realty Document", "create")`.
+
+**Applying a DocPerm change on this box:** `bench migrate` is blocked by another app, and
+`doc.save()` on a DocType in developer_mode **re-exports the OLD permissions back over your
+JSON** — it silently undid the change once. The working recipe is: edit the doctype JSON +
+`_ledger_perms()` locally → `UPDATE tabDocPerm` directly via
+`bench --site … mariadb --execute` → `bench … clear-cache` → rsync the JSON up **after** (so a
+future `migrate` re-applies the same values instead of reverting them).
+
+**Residual, deliberately not changed:** `Realty Lead` still grants execs `write` (they need it
+for `log_activity` / `update_lead_stage`), so a determined rep could REST-PUT `sales_owner` and
+self-assign a lead even though `reassign_lead` is now manager-gated. Closing that needs
+field-level permissions, not a DocPerm flip. `Realty Booking` / `Payment Due` / `Campaign` /
+`Channel Partner` are likewise still exec-writable.
+
+**UI gating must mirror the server gate** or reps get buttons that only ever 403. Fixed in this
+pass for: Documents Edit + "Make shareable" (`page-documents.jsx`, `lead-detail.jsx`), Inventory
+"New project" / "Add units" (`page-inventory.jsx`). The pattern is
+`isManager || d.uploadedBy === me`.
+
+**`frappe.show_alert` / `msgprint` render raw HTML** — React's escaping does not apply. Every
+record field interpolated into one is an injection sink; a lead named
+`<img src=x onerror=…>` executed JS in the desk session. Use `window.esc()` (shell.jsx) at
+those call sites.
+
 ## Current state (done) & ideas for next
 
 **Done:** all modules render live; full CRUD/actions wired; Project+Inventory creation; lead
@@ -353,6 +438,23 @@ copy links. Approve/reject/revoke gate on real Frappe roles (`_is_manager()`). T
 (upload → request → approve → guest opens link → revoke → 403) was verified live in-browser + via curl,
 and backend acceptance tests confirmed the private-file ACL, role gating, idempotent approve, un-share
 hard-revoke, `delete_project` document cascade, and the `share_key` unique index.
+
+**End-to-end audit (07 Aug 2026).** A full E2E pass over all 24 doctypes / 50 endpoints / 13
+modules, driven through the six real client logins (not the Administrator token — that passes
+every gate and gives false confidence). 40+ defects found and fixed; see the Security model
+section above and the new gotchas. The biggest were: the **REST-API bypass of every approval
+gate** (critical), **disabling a login didn't end its session** (critical), **`record_receipt`
+overwrote a historic `paid_at`** (critical), **My Day permanently empty for non-rep logins**
+(critical), the **lost-lead id race**, **`set_unit_status` bypassing the hold workflow**,
+**`process_payout` ungated and unaudited**, **`send_reminder` unauthenticated**, an **archived
+document still serving its public link**, and **fabricated analytics** on Dashboard/Reports.
+
+Things that were tested hard and held: the hold/reserve state machine (request → approve →
+hand-over → release → auto-decline, with row locks), the guest-link security model
+(private-file ACL, byte-identical denial, revoke → 403, lazy expiry, `access_count`), the
+`_is_user_admin` vs `_is_manager` split, the `_managed_user` allowlist and its
+no-enumeration-oracle message, granular add-units numbering + idempotency, rollup
+reconciliation, `/` vs ⌘K, and React's escaping of hostile lead names.
 
 **Not yet / out of scope (production-build items):** real SMS/WhatsApp/email & payment gateways
 (`send_reminder` just logs a Communication), cost-sheet/agreement PDF generation, RERA hooks, native

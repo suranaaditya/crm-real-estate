@@ -41,6 +41,10 @@ window.DirectionA = function Workspace({ density = "comfortable", defaultView = 
     if (stage !== "all") l = l.filter(x => x.stage === stage);
     l.sort((a, b) => {
       const av = a[sort.key] == null ? "" : a[sort.key], bv = b[sort.key] == null ? "" : b[sort.key];
+      // must return 0 on ties: the old `av > bv ? 1 : -1` reported -1 for BOTH (a,b) and
+      // (b,a), which breaks the comparator contract and shuffles equal rows (e.g. the ~700
+      // leads whose visitOn is null) unpredictably between renders.
+      if (av === bv) return 0;
       return sort.dir === "asc" ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
     });
     return l;
@@ -187,7 +191,7 @@ function TableView({ leads, totalCount, density, rowH, selected, setSelected, so
   const applyReassign = async () => {
     try {
       await frappe.call({ method: "dux_crm_realty.api.crm.bulk_reassign", args: { leads: JSON.stringify([...selected]), owner: bulkOwner } });
-      frappe.show_alert({ message: selected.size + " leads " + (bulkOwner ? "assigned to " + bulkOwner : "unassigned"), indicator: "green" });
+      frappe.show_alert({ message: selected.size + " leads " + (bulkOwner ? "assigned to " + esc(bulkOwner) : "unassigned"), indicator: "green" });
       setReassignOpen(false); setSelected(new Set());
       if (refresh) await refresh();
     } catch (e) { frappe.msgprint(e.message || "Could not reassign"); }
@@ -199,7 +203,7 @@ function TableView({ leads, totalCount, density, rowH, selected, setSelected, so
     try {
       if (action === "lost") await frappe.call({ method: "dux_crm_realty.api.crm.update_lead_stage", args: { lead: l.id, stage: "lost" } });
       if (action === "booked") await frappe.call({ method: "dux_crm_realty.api.crm.update_lead_stage", args: { lead: l.id, stage: "booked" } });
-      frappe.show_alert({ message: l.name + " → " + action, indicator: "blue" });
+      frappe.show_alert({ message: esc(l.name) + " → " + esc(action), indicator: "blue" });
       if (refresh) await refresh();
     } catch (e) { frappe.msgprint(e.message || "Action failed"); }
   };
@@ -343,13 +347,16 @@ function KanbanView({ data, leads, density, onOpen, onNew }) {
   visibleStages.forEach(s => grouped[s.id] = []);
   leads.forEach(l => { if (grouped[l.stage]) grouped[l.stage].push(l); });
   Object.keys(grouped).forEach(k => grouped[k].sort((a, b) => b.score - a.score));
-  const stageValue = (id) => grouped[id].reduce((a, l) => a + l.budget, 0);
+  const stageValue = (id) => grouped[id].reduce((a, l) => a + (l.budget || 0), 0);
   const totalValue = visibleStages.reduce((a, s) => a + stageValue(s.id), 0);
+  // count the cards actually rendered — `leads` still includes the `lost` stage, which has
+  // no column, so the header claimed 875 active while 740 cards were on screen
+  const shownCount = visibleStages.reduce((a, s) => a + grouped[s.id].length, 0);
 
   return (
     <>
       <div style={{ padding: "12px 24px 0", fontSize: 12, color: "var(--neutral-600)" }}>
-        <strong style={{ color: "var(--neutral-900)", fontFamily: "var(--font-display)", fontSize: 14 }}>{fmtINR(totalValue)}</strong> in pipeline · {leads.length} active leads
+        <strong style={{ color: "var(--neutral-900)", fontFamily: "var(--font-display)", fontSize: 14 }}>{fmtINR(totalValue)}</strong> in pipeline · {shownCount} active leads
       </div>
       <div style={{ flex: 1, overflowX: "auto", overflowY: "hidden", padding: "16px 24px 24px" }}>
         <div style={{ display: "flex", gap: 14, height: "100%", minWidth: "fit-content" }}>

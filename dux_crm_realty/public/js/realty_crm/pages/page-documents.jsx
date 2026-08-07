@@ -113,6 +113,7 @@ function DocCard({ d, isManager, me, onDownload, onShare, onEdit, onHistory, act
   const shares = d.shares || [];
   const approved = shares.filter(s => s.status === "Approved");
   const pending = shares.filter(s => s.status === "Requested");
+  const canEdit = isManager || d.uploadedBy === me;   // mirrors update_document's own gate
   const tone = (fg, bg) => ({ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 700,
     padding: "3px 8px", borderRadius: 999, background: bg, color: fg, letterSpacing: "0.02em" });
   return (
@@ -128,7 +129,9 @@ function DocCard({ d, isManager, me, onDownload, onShare, onEdit, onHistory, act
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-          <button onClick={onEdit} title="Edit / rename / delete" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="edit" size={14} /></button>
+          {/* update_document only accepts the uploader or a manager — don't offer the
+              affordance to anyone else, they'd just hit a 403 after filling the form. */}
+          {canEdit && <button onClick={onEdit} title="Edit / rename / delete" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="edit" size={14} /></button>}
           <button onClick={onDownload} title="Download" style={{ ...iconBtn, width: 32, height: 32 }}><Icon name="download" size={14} /></button>
         </div>
       </div>
@@ -153,7 +156,7 @@ function DocCard({ d, isManager, me, onDownload, onShare, onEdit, onHistory, act
             <span style={{ fontSize: 12, color: "var(--neutral-400)", display: "inline-flex", alignItems: "center", gap: 6 }}>
               <Icon name="shield" size={13} /> Not shareable
             </span>
-            <Btn variant="outline" size="sm" icon="link" onClick={() => act("update_document", { document: d.id, shareable: 1 }, "Marked shareable", "green")}>Make shareable</Btn>
+            {canEdit && <Btn variant="outline" size="sm" icon="link" onClick={() => act("update_document", { document: d.id, shareable: 1 }, "Marked shareable", "green")}>Make shareable</Btn>}
           </div>
         )}
         {d.shareable && approved.length === 0 && pending.length === 0 && (

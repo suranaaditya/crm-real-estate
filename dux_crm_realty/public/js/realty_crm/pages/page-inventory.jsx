@@ -158,7 +158,9 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
               {projQuery && <button onClick={() => setProjQuery("")} title="Clear" style={{ border: 0, background: "transparent", cursor: "pointer", color: "var(--neutral-400)", display: "inline-flex" }}><Icon name="x" size={13} /></button>}
             </div>
           )}
-          <Btn variant="outline" size="sm" icon="plus" onClick={() => setShowProjectModal(true)}>New project</Btn>
+          {/* create_project / add_units are manager-gated server-side — don't offer a
+              button an executive can only get a 403 from */}
+          {isManager && <Btn variant="outline" size="sm" icon="plus" onClick={() => setShowProjectModal(true)}>New project</Btn>}
         </div>
       </div>
 
@@ -200,7 +202,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
               {proj.locality}, {proj.city} · {proj.typology} · {proj.towers} tower{proj.towers > 1 ? "s" : ""} · Possession {proj.possession}
             </div>
             <div style={{ marginTop: 12 }}>
-              <Btn variant="accent" size="sm" icon="plus" onClick={() => setShowUnitsModal(true)}>Add units</Btn>
+              {isManager && <Btn variant="accent" size="sm" icon="plus" onClick={() => setShowUnitsModal(true)}>Add units</Btn>}
             </div>
           </div>
           <ProjStat label="TOTAL" value={proj.totalUnits} />
@@ -278,7 +280,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
               No inventory yet for {proj.name}
             </div>
             <div style={{ fontSize: 13, marginBottom: 18 }}>Add a tower's units to start building the tower / floor / unit map.</div>
-            <Btn variant="accent" icon="plus" onClick={() => setShowUnitsModal(true)}>Add units</Btn>
+            {isManager && <Btn variant="accent" icon="plus" onClick={() => setShowUnitsModal(true)}>Add units</Btn>}
           </div>
         )}
 

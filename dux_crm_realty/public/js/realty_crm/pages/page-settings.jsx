@@ -209,7 +209,7 @@ function ProjectsSettings() {
       async () => {
         try {
           const r = await frappe.call({ method: "dux_crm_realty.api.crm.delete_project", args: { code: p.id } });
-          frappe.show_alert({ message: p.name + " deleted (" + r.message.units + " units)", indicator: "orange" });
+          frappe.show_alert({ message: esc(p.name) + " deleted (" + r.message.units + " units)", indicator: "orange" });
           await refreshCRM();
         } catch (e) { frappe.msgprint(e.message || "Could not delete project"); }
       }

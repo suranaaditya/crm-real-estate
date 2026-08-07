@@ -10,6 +10,7 @@ record receipt, send reminder, process payout, schedule visit).
 """
 
 import datetime
+import re
 
 import frappe
 from frappe import _
@@ -85,6 +86,33 @@ def _s(v):
 	return v
 
 
+def _parse_time(raw, default="11:00"):
+	"""Normalise a UI time to HH:MM:SS, or throw a readable error.
+
+	Passing an unvalidated string straight into a Time column makes MySQL raise
+	OperationalError, which reaches the client as a 500 carrying the internal database and
+	table names. Used by schedule_visit and create_task.
+	"""
+	t = (raw or default).strip()
+	if re.fullmatch(r"\d{1,2}:\d{2}", t):
+		t += ":00"
+	if not re.fullmatch(r"\d{1,2}:\d{2}:\d{2}", t):
+		frappe.throw(_("Enter the time as HH:MM (you entered “{0}”).").format(raw))
+	hh, mm, ss = (int(x) for x in t.split(":"))
+	if hh > 23 or mm > 59 or ss > 59:
+		frappe.throw(_("“{0}” is not a valid time.").format(raw))
+	return t
+
+
+def _parse_date(raw, default=None):
+	"""Normalise a UI date to YYYY-MM-DD, or throw. Same reasoning as _parse_time."""
+	d = (raw or "").strip() or (default or frappe.utils.nowdate())
+	try:
+		return frappe.utils.getdate(d).isoformat()
+	except Exception:
+		frappe.throw(_("Enter the date as YYYY-MM-DD (you entered “{0}”).").format(raw))
+
+
 def _initials(name):
 	parts = (name or "").split()
 	return ("".join(p[0] for p in parts[:2])).upper() if parts else "?"
@@ -93,6 +121,16 @@ def _initials(name):
 def _pid(code):
 	"""'AN' -> 'P-AN' (restore the prototype project id)."""
 	return ("P-" + code) if code else None
+
+
+def _pcode(pid):
+	"""'P-AN' -> 'AN'; 'AN' -> 'AN'. Strips only a LEADING 'P-'.
+
+	``str.replace("P-", "", 1)`` removed the first "P-" anywhere in the string, so a code
+	like 'ZZP-X' became 'ZZX' and the project was unreachable by add_units/delete_project.
+	"""
+	s = (pid or "").strip()
+	return s[2:] if s.startswith("P-") else s
 
 
 # --------------------------------------------------------------------------- #
@@ -371,10 +409,17 @@ def get_bootstrap():
 		"priceFrom": p.price_from, "priceTo": p.price_to, "possession": p.possession}
 		for p in projects_raw]
 
+	# total_leads on the Channel Partner row is a denormalised field NOTHING ever writes, so
+	# it froze at import time (67 partners showed a stale count while 261 leads actually
+	# pointed at a partner). Count live off the leads we already have in memory.
+	leads_per_partner = {}
+	for ld in leads_raw:
+		if ld.channel_partner:
+			leads_per_partner[ld.channel_partner] = leads_per_partner.get(ld.channel_partner, 0) + 1
 	channel_partners = [{
 		"id": cp.partner_name, "name": cp.partner_name, "contact": cp.contact_person,
 		"rera": cp.rera, "phone": cp.phone, "email": cp.email, "tier": cp.tier,
-		"totalLeads": cp.total_leads, "bookings": cp.bookings,
+		"totalLeads": leads_per_partner.get(cp.partner_name, 0), "bookings": cp.bookings,
 		"commission": cp.commission, "outstanding": cp.outstanding} for cp in partners]
 
 	# Top-level tasks/activity (the prototype's dashboard "Today" panel + any
@@ -442,10 +487,55 @@ def _current_owner():
 # write actions
 # --------------------------------------------------------------------------- #
 def _next_id(doctype, field, prefix, width):
+	"""Allocate the next human id (LD-0001, HLD-0007 …) ATOMICALLY.
+
+	This used to be ``max(cast(...)) + 1``, a lock-free read-then-write: two concurrent
+	captures read the same max and the loser's insert died on the unique index, so a lead
+	was simply LOST (reproduced: 3 of 6 parallel create_lead calls failed).
+
+	Frappe's ``tabSeries`` counter is the right primitive — a single
+	``INSERT … ON DUPLICATE KEY UPDATE current = current + 1`` is atomic under concurrency.
+	The counter is seeded once from the existing max so ids continue where the data left
+	off, and GREATEST() means it never goes backwards — which also stops a deleted
+	document_id/share_id from being reissued to a different record later (these ledgers set
+	allow_rename=0 precisely because the id is an immutable audit identity).
+	"""
+	from frappe.model.naming import getseries
+	# namespaced so we can never collide with another app's series on this shared site
+	key = "RLTY-" + prefix
 	last = frappe.db.sql(
 		f"""select max(cast(replace(`{field}`, %s, '') as unsigned)) from `tab{doctype}`""",
-		(prefix,))[0][0]
-	return f"{prefix}{str((last or 0) + 1).zfill(width)}"
+		(prefix,))[0][0] or 0
+	frappe.db.sql(
+		"""insert into `tabSeries` (name, current) values (%s, %s)
+		   on duplicate key update current = greatest(current, %s)""",
+		(key, last, last))
+	return f"{prefix}{getseries(key, width)}"
+
+
+def _insert_with_id(build, doctype, field, prefix, width, attempts=6, ignore_permissions=False):
+	"""Insert a doc whose human id comes from _next_id, retrying on the id race.
+
+	_next_id is a lock-free max()+1: two concurrent captures read the same max and the
+	loser's insert dies on the unique index (observed: 3 of 6 parallel create_lead calls
+	failed with "Realty Lead LD-2876 already exists" — i.e. LOST LEADS). Re-deriving the
+	id and retrying turns that collision into a brief wait instead of a dropped record.
+
+	``build`` takes the freshly minted id and returns the dict to insert.
+	"""
+	for i in range(attempts):
+		new_id = _next_id(doctype, field, prefix, width)
+		savepoint = f"sp_{prefix.strip('-').lower()}_{i}"
+		try:
+			frappe.db.savepoint(savepoint)
+			doc = frappe.get_doc(build(new_id))
+			doc.insert(ignore_permissions=ignore_permissions)
+			return doc
+		except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
+			frappe.db.rollback(save_point=savepoint)
+			if i == attempts - 1:
+				frappe.throw(_("Too many simultaneous entries — please try again."))
+	return None
 
 
 def _lead_activities(doc):
@@ -471,27 +561,31 @@ def create_lead(payload):
 
 	cp = payload.get("channelPartner") or None
 	score = {"hot": 85, "high": 70, "medium": 55, "low": 40}.get(payload.get("priority"), 55)
-	code = (payload.get("project") or "").replace("P-", "", 1) or None
+	code = _pcode(payload.get("project")) or None
 	today = frappe.utils.nowdate()
 
-	doc = frappe.get_doc({
-		"doctype": "Realty Lead",
-		"lead_id": _next_id("Realty Lead", "lead_id", "LD-", 4),
-		"lead_name": payload["name"], "phone": payload["phone"],
-		"email": payload.get("email"), "occupation": payload.get("occupation"),
-		"city": payload.get("city"), "stage": payload.get("stage") or "new",
-		"score": score, "project": code, "interest": payload.get("interest"),
-		"budget": frappe.utils.flt(payload.get("budget")) or None,
-		"source": payload.get("source"), "channel_partner": cp,
-		"sales_owner": owner_name, "lead_created": today, "last_activity": today,
-		"activities": [{"activity_datetime": frappe.utils.now(), "who": entered_by,
-			"activity_type": "created",
-			"text": f"Lead captured from {payload.get('source', 'Direct')} by {entered_by}."}],
-	})
+	acts = [{"activity_datetime": frappe.utils.now(), "who": entered_by,
+		"activity_type": "created",
+		"text": f"Lead captured from {payload.get('source', 'Direct')} by {entered_by}."}]
 	if payload.get("notes"):
-		doc.append("activities", {"activity_datetime": frappe.utils.now(),
+		acts.append({"activity_datetime": frappe.utils.now(),
 			"who": entered_by, "activity_type": "note", "text": payload["notes"]})
-	doc.insert()
+
+	def _build(lead_id):
+		return {
+			"doctype": "Realty Lead", "lead_id": lead_id,
+			"lead_name": (payload["name"] or "").strip(), "phone": (payload["phone"] or "").strip(),
+			"email": (payload.get("email") or "").strip() or None,
+			"occupation": payload.get("occupation"),
+			"city": payload.get("city"), "stage": payload.get("stage") or "new",
+			"score": score, "project": code, "interest": payload.get("interest"),
+			"budget": frappe.utils.flt(payload.get("budget")) or None,
+			"source": payload.get("source"), "channel_partner": cp,
+			"sales_owner": owner_name, "lead_created": today, "last_activity": today,
+			"activities": acts,
+		}
+
+	doc = _insert_with_id(_build, "Realty Lead", "lead_id", "LD-", 4)
 	frappe.db.commit()
 	return {"ok": True, "lead_id": doc.lead_id}
 
@@ -499,6 +593,9 @@ def create_lead(payload):
 @frappe.whitelist()
 def log_activity(lead, text, activity_type="note"):
 	_guard()
+	text = (text or "").strip()
+	if not text:
+		frappe.throw(_("Write something to log."))
 	doc = frappe.get_doc("Realty Lead", lead)
 	doc.check_permission("write")
 	doc.append("activities", {"activity_datetime": frappe.utils.now(),
@@ -525,18 +622,39 @@ def update_lead_stage(lead, stage):
 	return {"ok": True, "stage": stage, "activities": _lead_activities(doc)}
 
 
+def _assignable_owner(owner):
+	"""Resolve an owner name/owner_id to a real Realty Sales Owner, or None for Unassigned.
+
+	Throws on an unrecognised value instead of coercing it to None — silently turning a
+	typo'd/stale rep name into "Unassigned" (while the UI toast cheerfully reported the
+	requested name) meant reassignment could drop a lead off everyone's list.
+	"""
+	if not owner:
+		return None
+	if frappe.db.exists("Realty Sales Owner", owner):
+		return owner
+	resolved = frappe.db.get_value("Realty Sales Owner", {"owner_id": owner}, "full_name")
+	if not resolved:
+		frappe.throw(_("Sales rep {0} not found.").format(owner))
+	return resolved
+
+
 @frappe.whitelist()
 def reassign_lead(lead, owner=None):
+	"""Assign a lead to a rep. MANAGER ONLY — this is the "Assign to" control the lead
+	drawer already labels a manager control; without the gate any executive could pull
+	colleagues' leads onto themselves."""
 	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can reassign leads."), frappe.PermissionError)
 	doc = frappe.get_doc("Realty Lead", lead)
 	doc.check_permission("write")
-	owner = owner or None
-	if owner and not frappe.db.exists("Realty Sales Owner", owner):
-		owner = frappe.db.get_value("Realty Sales Owner", {"owner_id": owner}, "full_name") or None
+	owner = _assignable_owner(owner)
 	doc.sales_owner = owner
 	doc.append("activities", {"activity_datetime": frappe.utils.now(),
 		"who": frappe.utils.get_fullname() or "You", "activity_type": "note",
 		"text": f"Lead assigned to {owner or 'Unassigned'}."})
+	doc.last_activity = frappe.utils.nowdate()
 	doc.save()
 	frappe.db.commit()
 	return {"ok": True, "owner": owner, "activities": _lead_activities(doc)}
@@ -544,18 +662,26 @@ def reassign_lead(lead, owner=None):
 
 @frappe.whitelist()
 def bulk_reassign(leads, owner=None):
+	"""Bulk assign. MANAGER ONLY (see reassign_lead)."""
 	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can reassign leads."), frappe.PermissionError)
 	if isinstance(leads, str):
-		leads = frappe.parse_json(leads)
-	owner = owner or None
-	if owner and not frappe.db.exists("Realty Sales Owner", owner):
-		owner = frappe.db.get_value("Realty Sales Owner", {"owner_id": owner}, "full_name") or None
+		try:
+			leads = frappe.parse_json(leads)
+		except Exception:
+			frappe.throw(_("Could not read the list of leads."))
+	if not isinstance(leads, (list, tuple)) or not leads:
+		frappe.throw(_("Select at least one lead to reassign."))
+	owner = _assignable_owner(owner)
 	who = frappe.utils.get_fullname() or "You"
+	today = frappe.utils.nowdate()
 	for lid in leads:
 		doc = frappe.get_doc("Realty Lead", lid)
 		doc.sales_owner = owner
 		doc.append("activities", {"activity_datetime": frappe.utils.now(), "who": who,
 			"activity_type": "note", "text": f"Lead assigned to {owner or 'Unassigned'}."})
+		doc.last_activity = today
 		doc.save(ignore_permissions=True)
 	frappe.db.commit()
 	return {"ok": True, "count": len(leads), "owner": owner}
@@ -570,26 +696,32 @@ def create_task(payload):
 		frappe.throw(_("Task title is required."))
 	# assignee: explicit -> resolve; else default to creator (if a rep)
 	assigned = payload.get("assignedTo") or None
-	if assigned and not frappe.db.exists("Realty Sales Owner", assigned):
-		assigned = frappe.db.get_value("Realty Sales Owner", {"owner_id": assigned}, "full_name") or assigned
+	if assigned:
+		# resolve full_name or owner_id; anything else would reach the Link validator and
+		# surface as a raw "Could not find Assigned To: <name>"
+		assigned = _resolve_owner(assigned)
+		if not assigned:
+			frappe.throw(_("{0} is not a sales team member — pick who this task is for.")
+				.format(payload.get("assignedTo")))
 	if not assigned:
 		fn = frappe.utils.get_fullname()
 		assigned = fn if frappe.db.exists("Realty Sales Owner", fn) else None
-	lead = payload.get("lead") or None
-	if lead and not frappe.db.exists("Realty Lead", lead):
-		lead = frappe.db.get_value("Realty Lead", {"lead_id": lead}, "name") or None
-	tm = payload.get("time")
-	if tm and len(tm.split(":")) == 2:
-		tm += ":00"
-	doc = frappe.get_doc({
-		"doctype": "Realty Task", "task_id": _next_id("Realty Task", "task_id", "TSK-", 4),
+	requested_lead = payload.get("lead") or None
+	lead = _resolve_lead(requested_lead)
+	# silently dropping the link produced an orphan task and no Lead Activity, while the
+	# caller was told the task was created against the lead
+	if requested_lead and not lead:
+		frappe.throw(_("Lead {0} not found.").format(requested_lead))
+	tm = _parse_time(payload.get("time"), default="10:00") if payload.get("time") else None
+	due = _parse_date(payload.get("date"))
+	doc = _insert_with_id(lambda tid: {
+		"doctype": "Realty Task", "task_id": tid,
 		"title": payload["title"], "task_type": payload.get("type") or "Follow-up call",
 		"status": "Open", "priority": payload.get("priority") or "med",
-		"assigned_to": assigned, "due_date": payload.get("date") or frappe.utils.nowdate(),
+		"assigned_to": assigned, "due_date": due,
 		"due_time": tm, "created_by_name": frappe.utils.get_fullname(),
 		"lead": lead, "notes": payload.get("notes"),
-	})
-	doc.insert(ignore_permissions=True)
+	}, "Realty Task", "task_id", "TSK-", 4, ignore_permissions=True)
 	if lead:
 		ld = frappe.get_doc("Realty Lead", lead)
 		ld.append("activities", {"activity_datetime": frappe.utils.now(),
@@ -604,6 +736,10 @@ def create_task(payload):
 def set_task_status(task, done=None, status=None):
 	_guard()
 	doc = frappe.get_doc("Realty Task", task)
+	# a rep may tick off their OWN work (or an unassigned task); anything else is a manager
+	actor = _actor_owner()
+	if not (_is_manager() or not doc.assigned_to or doc.assigned_to == actor):
+		frappe.throw(_("You can only update your own tasks."), frappe.PermissionError)
 	if status:
 		doc.status = status
 	elif done is not None:
@@ -620,21 +756,28 @@ def toggle_task(lead, task_index):
 	_guard()
 	doc = frappe.get_doc("Realty Lead", lead)
 	doc.check_permission("write")
-	idx = int(task_index)
-	if 0 <= idx < len(doc.tasks):
-		doc.tasks[idx].done = 0 if doc.tasks[idx].done else 1
-		doc.save()
-		frappe.db.commit()
-	return {"ok": True}
+	try:
+		idx = int(task_index)
+	except (TypeError, ValueError):
+		frappe.throw(_("Invalid task index."))
+	if not (0 <= idx < len(doc.tasks)):
+		# used to return {"ok": True} having done nothing, so the caller could not tell
+		frappe.throw(_("That task no longer exists."))
+	doc.tasks[idx].done = 0 if doc.tasks[idx].done else 1
+	doc.save()
+	frappe.db.commit()
+	return {"ok": True, "done": bool(doc.tasks[idx].done)}
 
 
 @frappe.whitelist()
 def set_unit_status(unit_id, status, note=None):
 	"""Set a unit to an explicit status (Available/Blocked/Reserved/Sold).
 
-	Replaces the old toggle: the inventory panel sends the exact target. Validates
-	the target + the transition, gates a Sold-unwind behind a manager role, then
-	recomputes the project rollups. ``block_unit`` delegates here for back-compat.
+	MANAGER ONLY. This is the direct, un-approved path to a unit status; leaving it
+	open made the whole hold/reserve approval workflow bypassable (a rep refused at
+	approve_hold could just call this and reach the identical Blocked/Reserved state
+	with no ledger entry). Reps go through request_hold -> approve_hold instead; the
+	inventory panel already only renders these buttons to a manager.
 	"""
 	_guard()
 	# case-insensitive match against the allowed set (avoids brittle .title())
@@ -642,6 +785,9 @@ def set_unit_status(unit_id, status, note=None):
 		if s.lower() == (status or "").strip().lower()), None)
 	if not target:
 		frappe.throw(_("Invalid unit status: {0}").format(status))
+	if not _is_manager():
+		frappe.throw(_("Only a manager can set a unit's status directly. "
+			"Request a hold or reserve instead."), frappe.PermissionError)
 	# lock the unit row first → serialize against the hold endpoints
 	frappe.db.get_value("Realty Unit", unit_id, "status", for_update=True)
 	unit = frappe.get_doc("Realty Unit", unit_id)
@@ -651,16 +797,32 @@ def set_unit_status(unit_id, status, note=None):
 		return {"ok": True, "unit": unit_id, "status": target.lower(), "unchanged": True}
 	if target not in _UNIT_TRANSITIONS.get(current, set()):
 		frappe.throw(_("Cannot move a unit from {0} to {1}.").format(current, target))
+	# a unit named by a booking is committed — it may only go to Sold
+	booked = _booking_on_unit(unit_id)
+	if booked and target != "Sold":
+		frappe.throw(_("Unit {0} is booked under {1} — release that booking first.")
+			.format(unit_id, booked))
 	# unwinding a sale reverses revenue — restrict to managers/admins
 	if current == "Sold" and not _is_manager():
 		frappe.throw(_("Only a manager can release a sold unit."), frappe.PermissionError)
 	unit.status = target
 	unit.save()
-	# keep the hold ledger consistent: a manual move to Sold/Available closes any
-	# active hold/request so unit.status and the ledger can never contradict.
+	# Keep the hold ledger consistent with unit.status. Sold/Available close everything.
+	# Blocked/Reserved must also close an Approved hold of the OTHER kind, otherwise the
+	# grid ships e.g. status="blocked" alongside an Approved *Reserve* hold — the
+	# "ledger can never contradict" invariant was only half-enforced before.
 	if target in ("Sold", "Available"):
 		_close_active_holds(unit_id, "Overridden" if target == "Sold" else "Released",
 			"Marked sold" if target == "Sold" else "Released")
+	else:
+		for h in _active_holds(unit_id):
+			if h.status == "Approved" and KIND_TO_STATUS.get(h.kind) != target:
+				d = frappe.get_doc("Realty Unit Hold", h.name)
+				d.status = "Overridden"
+				d.closed_by = _actor_owner()
+				d.closed_on = frappe.utils.now()
+				d.close_reason = "Unit set to " + target
+				d.save(ignore_permissions=True)
 	_recompute_project_counts(unit.project)
 	frappe.db.commit()
 	return {"ok": True, "unit": unit_id, "status": target.lower()}
@@ -677,6 +839,19 @@ def block_unit(unit_id):
 # --------------------------------------------------------------------------- #
 # unit hold / reserve workflow (request -> manager approval; holder hand-over)
 # --------------------------------------------------------------------------- #
+def _booking_on_unit(unit_id):
+	"""The booking_id of any Booking that already names this unit, else None.
+
+	`Realty Booking.unit` is a Data field with no link integrity, so a unit can be
+	registered under a booking while inventory still shows it Available — which let a
+	second buyer hold, reserve and be sold the same apartment (reproduced on C-1004,
+	registered under BK-2599). Every path that commits a unit consults this.
+	"""
+	if not unit_id:
+		return None
+	return frappe.db.get_value("Realty Booking", {"unit": unit_id}, "booking_id")
+
+
 def _active_holds(unit_id):
 	"""Active holds (Requested/Approved) for a unit. Invariant after each endpoint:
 	at most one Approved + at most one Requested per unit."""
@@ -726,32 +901,39 @@ def request_hold(unit_id, kind, lead=None, contact_name=None, contact_phone=None
 		frappe.throw(_("Unit {0} not found.").format(unit_id))
 	if cur_status == "Sold":
 		frappe.throw(_("Unit {0} is sold.").format(unit_id))
+	booked = _booking_on_unit(unit_id)
+	if booked:
+		frappe.throw(_("Unit {0} is already booked under {1}.").format(unit_id, booked))
 	# resolve lead (accept lead_id or docname) vs outside contact
-	lead = lead or None
-	if lead and not frappe.db.exists("Realty Lead", lead):
-		lead = frappe.db.get_value("Realty Lead", {"lead_id": lead}, "name") or None
+	requested_lead = lead or None
+	lead = _resolve_lead(lead)
+	# an unresolvable lead reference used to fall through silently and be recorded as an
+	# OUTSIDE enquiry — the hold then lost its link to the buyer it was taken for
+	if requested_lead and not lead:
+		frappe.throw(_("Lead {0} not found.").format(requested_lead))
 	lead_name = frappe.db.get_value("Realty Lead", lead, "lead_name") if lead else None
 	contact_name = (contact_name or "").strip() or None
 	if not lead and not contact_name:
 		frappe.throw(_("Pick a lead or enter an outside contact name."))
-	# resolve requester (manager may file on behalf of a rep)
-	rb = requested_by or _actor_owner()
-	if rb and not frappe.db.exists("Realty Sales Owner", rb):
-		rb = frappe.db.get_value("Realty Sales Owner", {"owner_id": rb}, "full_name") or rb
+	# Resolve requester. Only a MANAGER may file on behalf of someone else — the parameter
+	# used to be honoured for anyone, so a rep could attribute a hold to a colleague and
+	# thereby hand them the holder rights (release / approve a hand-over) over it.
+	rb = _actor_owner()
+	if requested_by and _is_manager():
+		rb = _resolve_owner(requested_by) or rb
 	# one pending request per unit (kind-agnostic) — a hand-over supersedes nothing
 	# until approved, so block a second concurrent request.
 	pending = [h for h in _active_holds(unit_id) if h.status == "Requested"]
 	if pending:
 		frappe.throw(_("A request is already pending for this unit (by {0}). Contact them or ask a manager to act.").format(pending[0].requested_by or "a colleague"))
-	doc = frappe.get_doc({
-		"doctype": "Realty Unit Hold",
-		"hold_id": _next_id("Realty Unit Hold", "hold_id", "HLD-", 4),
+	doc = _insert_with_id(lambda hid: {
+		"doctype": "Realty Unit Hold", "hold_id": hid,
 		"unit": unit_id, "kind": kind, "status": "Requested",
 		"requested_by": rb, "requested_on": frappe.utils.now(),
 		"lead": lead, "lead_name": lead_name,
 		"contact_name": contact_name, "contact_phone": (contact_phone or "").strip() or None,
 		"note": note,
-	}).insert(ignore_permissions=True)
+	}, "Realty Unit Hold", "hold_id", "HLD-", 4, ignore_permissions=True)
 	frappe.db.commit()
 	return {"ok": True, "hold_id": doc.hold_id, "status": "Requested"}
 
@@ -956,7 +1138,7 @@ def upload_document(title=None, project=None, unit=None, lead=None, booking=None
 	ext = os.path.splitext(up.filename or "")[1].lower()
 	if ext not in ALLOWED_UPLOAD_EXT:
 		frappe.throw(_("File type {0} is not allowed.").format(ext or "(none)"))
-	code = (project or "").replace("P-", "", 1)
+	code = _pcode(project)
 	if not code or not frappe.db.exists("Realty Project", code):
 		frappe.throw(_("Project {0} not found.").format(project))
 	unit = unit or None
@@ -1018,6 +1200,10 @@ def update_document(document, title=None, category=None, tags=None, shareable=No
 	if tags is not None:
 		doc.tags_text = _norm_tags(tags)
 	if status in ("Active", "Archived"):
+		if status == "Archived" and doc.status != "Archived":
+			# same reasoning as the guest-link check: don't leave live links behind a doc
+			# that has disappeared from the UI
+			_close_active_shares(document, "Revoked", "Document archived")
 		doc.status = status
 	doc.save(ignore_permissions=True)
 	frappe.db.commit()
@@ -1076,21 +1262,22 @@ def request_share(document, lead, note=None, channel="Link"):
 		frappe.throw(_("Mark this document shareable before requesting a share."))
 	if not doc.file_doc:
 		frappe.throw(_("This document has no file to share."))
+	if doc.status != "Active":
+		frappe.throw(_("This document is archived."))
 	lead = _resolve_lead(lead)
 	if not lead:
 		frappe.throw(_("Pick a lead to share with."))
 	if frappe.db.exists("Realty Document Share",
 			{"document": document, "lead": lead, "status": ["in", ["Requested", "Approved"]]}):
 		frappe.throw(_("This document already has a live or pending share for this lead."))
-	share = frappe.get_doc({
-		"doctype": "Realty Document Share",
-		"share_id": _next_id("Realty Document Share", "share_id", "SHR-", 4),
+	share = _insert_with_id(lambda sid: {
+		"doctype": "Realty Document Share", "share_id": sid,
 		"document": document, "document_title": doc.title,
 		"lead": lead, "lead_name": frappe.db.get_value("Realty Lead", lead, "lead_name"),
 		"status": "Requested", "channel": (channel if channel in ("Link", "Comms") else "Link"),
 		"requested_by": _resolve_owner(_actor_owner()), "requested_on": frappe.utils.now(),
 		"note": note,
-	}).insert(ignore_permissions=True)
+	}, "Realty Document Share", "share_id", "SHR-", 4, ignore_permissions=True)
 	frappe.db.commit()
 	return {"ok": True, "share_id": share.share_id, "status": "Requested"}
 
@@ -1223,7 +1410,9 @@ def view_shared_document(key=None):
 	if share.status != "Approved":
 		frappe.throw(_("This link is invalid or no longer available."), frappe.PermissionError)
 	doc = frappe.get_doc("Realty Document", share.document)
-	if not doc.shareable or not doc.file_doc:
+	# status must be checked too: archiving removed the document from every UI while its
+	# approved link happily kept serving the private bytes to anonymous callers.
+	if not doc.shareable or not doc.file_doc or doc.status != "Active":
 		frappe.throw(_("This link is invalid or no longer available."), frappe.PermissionError)
 	from frappe.utils.file_manager import get_file
 	import os
@@ -1246,7 +1435,11 @@ def view_shared_document(key=None):
 # --------------------------------------------------------------------------- #
 # AI email drafting (Ollama / Gemma) + email accounts + sending
 # --------------------------------------------------------------------------- #
-OLLAMA_TIMEOUT = 120
+# MUST stay comfortably below gunicorn's worker timeout (`-t 120` in config/supervisor.conf).
+# At 120 they raced: a cold `gemma4:e4b` load takes ~80s, and when it overran gunicorn killed
+# the worker outright, so the browser got a bare HTML 500 with nothing in the Error Log
+# instead of our handled "AI service unavailable" message.
+OLLAMA_TIMEOUT = 90
 EMAIL_KINDS = ("Greeting", "Follow-up", "Site visit invite", "Cost sheet / pricing",
 	"Share documents", "Thank you", "Custom")
 
@@ -1350,6 +1543,20 @@ def improve_text(text):
 
 
 # ---- email accounts (per-user SMTP sender; self-contained, smtplib only) ----
+def _may_edit_account(doc):
+	"""Who may modify a sending account: its owner, or a manager for a SHARED one.
+
+	The guard used to read `if doc.owner_user and doc.owner_user != session.user and not
+	_is_manager()`. For a shared account `owner_user` is blank, so the whole conjunction was
+	False and the PermissionError never fired — every logged-in user, down to a Sales
+	Executive, could repoint the shared team sender at their own address, overwrite its app
+	password, or delete it.
+	"""
+	if not doc.owner_user:
+		return _is_manager()
+	return doc.owner_user == frappe.session.user or _is_manager()
+
+
 def _visible_email_accounts():
 	"""Accounts the current login may use: their own + shared (owner blank). Managers see all."""
 	me = frappe.session.user
@@ -1403,7 +1610,7 @@ def save_email_account(payload):
 	acc_id = payload.get("id")
 	if acc_id and frappe.db.exists("Realty Email Account", acc_id):
 		doc = frappe.get_doc("Realty Email Account", acc_id)
-		if doc.owner_user and doc.owner_user != frappe.session.user and not _is_manager():
+		if not _may_edit_account(doc):
 			frappe.throw(_("You can only edit your own email account."), frappe.PermissionError)
 	else:
 		doc = frappe.get_doc({"doctype": "Realty Email Account",
@@ -1442,7 +1649,7 @@ def _set_default_account(name):
 def set_default_email_account(account):
 	_guard()
 	doc = frappe.get_doc("Realty Email Account", account)
-	if doc.owner_user and doc.owner_user != frappe.session.user and not _is_manager():
+	if not _may_edit_account(doc):
 		frappe.throw(_("You can only set your own account as default."), frappe.PermissionError)
 	_set_default_account(doc.name)
 	frappe.db.commit()
@@ -1453,7 +1660,7 @@ def set_default_email_account(account):
 def delete_email_account(account):
 	_guard()
 	doc = frappe.get_doc("Realty Email Account", account)
-	if doc.owner_user and doc.owner_user != frappe.session.user and not _is_manager():
+	if not _may_edit_account(doc):
 		frappe.throw(_("You can only delete your own email account."), frappe.PermissionError)
 	frappe.delete_doc("Realty Email Account", doc.name, force=1, ignore_permissions=True)
 	frappe.db.commit()
@@ -1532,7 +1739,7 @@ def send_email(payload):
 	acc = None
 	if acc_id and frappe.db.exists("Realty Email Account", acc_id):
 		acc = frappe.get_doc("Realty Email Account", acc_id)
-		if acc.owner_user and acc.owner_user != frappe.session.user and not _is_manager():
+		if not _may_edit_account(acc):
 			frappe.throw(_("You can't send from that account."), frappe.PermissionError)
 	else:
 		d = _default_email_account()
@@ -1853,8 +2060,13 @@ def create_crm_user(payload):
 
 	owner = payload.get("sales_owner") or None
 	if owner and frappe.db.exists("Realty Sales Owner", owner):
-		if not frappe.db.get_value("Realty Sales Owner", owner, "user"):
-			frappe.db.set_value("Realty Sales Owner", owner, "user", email)
+		taken = frappe.db.get_value("Realty Sales Owner", owner, "user")
+		if taken and taken != email:
+			# Don't record a link we did not actually make: the registry row would claim
+			# the new login IS that rep while Sales Owner.user still points elsewhere, so
+			# list_crm_users showed a link that _actor_owner() would never honour.
+			frappe.throw(_("{0} is already linked to another login.").format(owner))
+		frappe.db.set_value("Realty Sales Owner", owner, "user", email)
 	else:
 		owner = None
 	_register_login(email, full_name, role, owner, password_set=bool(password))
@@ -1895,6 +2107,16 @@ def set_crm_user_status(email, enabled):
 	frappe.db.set_value("User", email, "enabled", 1 if on else 0)
 	frappe.db.set_value("Realty CRM User", email, "status",
 		"Active" if on else "Disabled", update_modified=False)
+	if not on:
+		# Frappe only checks User.enabled when a session is CREATED
+		# (sessions.Session.validate_user runs in the non-resume branch only), so an
+		# already-signed-in browser keeps full read/write access to live client data
+		# until its cookie expires. Disabling must therefore terminate the sessions too.
+		frappe.db.commit()
+		try:
+			frappe.sessions.clear_sessions(email, force=True)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "set_crm_user_status clear_sessions")
 	frappe.db.commit()
 	return {"ok": True, "email": email, "enabled": on}
 
@@ -1912,10 +2134,18 @@ def set_crm_user_role(email, role):
 	u = frappe.get_doc("User", email)
 	have = {r.role for r in u.roles}
 	drop = [r for r in SAFE_REALTY_ROLES if r != role and r in have]
+	# NB: User.add_roles()/remove_roles() call a bare self.save(), so they run under the
+	# CALLER's permissions — a Realty Admin (not a System Manager) has no write access to
+	# the User doctype and got a 403, making role changes impossible for the client.
+	# Mutate the child table here and save with ignore_permissions, exactly as
+	# create_crm_user and set_crm_user_password already do. Still surgical: only the four
+	# Realty roles are touched, so other apps' roles on this shared box are untouched.
 	if drop:
-		u.remove_roles(*drop)
+		u.set("roles", [r for r in u.roles if r.role not in drop])
 	if role not in have:
-		u.add_roles(role)
+		u.append("roles", {"role": role})
+	if drop or role not in have:
+		u.save(ignore_permissions=True)
 	_assert_roles_unprivileged(email)
 	frappe.db.set_value("Realty CRM User", email, "crm_role", role, update_modified=False)
 	frappe.db.commit()
@@ -1966,6 +2196,14 @@ def create_rep(payload):
 	want_login = bool(payload.get("createLogin")) and bool(email)
 	user_link = None
 	if want_login:
+		# Creating a LOGIN is an identity decision, not a business one — hold it to the
+		# same narrower gate as the rest of user administration. Without this a Realty
+		# Sales Manager (who is _is_manager() but deliberately NOT _is_user_admin()) could
+		# mint a Realty Admin account here and walk straight around that distinction.
+		if not _is_user_admin():
+			frappe.throw(_("Only a CRM administrator can create a login. "
+				"Add the team member without one, then invite them from Settings → Users & access."),
+				frappe.PermissionError)
 		frole = payload.get("frappeRole") or "Realty Sales Executive"
 		if frole not in SAFE_REALTY_ROLES:
 			frole = "Realty Sales Executive"
@@ -2001,7 +2239,7 @@ def delete_project(code):
 	_guard()
 	if not _is_manager():
 		frappe.throw(_("Only a manager can delete a project."), frappe.PermissionError)
-	code = (code or "").replace("P-", "", 1)
+	code = _pcode(code)
 	if not frappe.db.exists("Realty Project", code):
 		frappe.throw(_("Project {0} not found.").format(code))
 	pname = frappe.db.get_value("Realty Project", code, "project_name")
@@ -2100,7 +2338,12 @@ def advance_booking(booking_id):
 	_guard()
 	bk = frappe.get_doc("Realty Booking", booking_id)
 	bk.check_permission("write")
-	i = BOOKING_STAGES.index(bk.stage) if bk.stage in BOOKING_STAGES else 0
+	if bk.stage not in BOOKING_STAGES:
+		# falling back to index 0 meant an unrecognised stage advanced to
+		# "agreement-signed" and set agreement_signed=1 — inventing a signed agreement
+		frappe.throw(_("Booking {0} has an unrecognised stage ({1}); fix it before advancing.")
+			.format(booking_id, bk.stage or "blank"))
+	i = BOOKING_STAGES.index(bk.stage)
 	if i < len(BOOKING_STAGES) - 1:
 		bk.stage = BOOKING_STAGES[i + 1]
 		if bk.stage == "agreement-signed":
@@ -2115,10 +2358,15 @@ def record_receipt(due_id):
 	_guard()
 	due = frappe.get_doc("Realty Payment Due", due_id)
 	due.check_permission("write")
+	# Re-recording an already-paid due used to overwrite paid_at with today's date and
+	# silently destroy the historic payment date. A receipt is recorded once.
+	if due.status == "paid":
+		return {"ok": True, "receipt_no": due.receipt_no, "unchanged": True,
+			"message": _("This due was already receipted on {0}.").format(_s(due.paid_at))}
 	due.status = "paid"
 	due.paid_at = frappe.utils.nowdate()
-	due.receipt_no = _next_id("Realty Payment Due", "receipt_no", "RCP-", 4) \
-		if not due.receipt_no else due.receipt_no
+	if not due.receipt_no:
+		due.receipt_no = _next_id("Realty Payment Due", "receipt_no", "RCP-", 4)
 	due.save()
 	frappe.db.commit()
 	return {"ok": True, "receipt_no": due.receipt_no}
@@ -2128,6 +2376,10 @@ def record_receipt(due_id):
 def send_reminder(due_id):
 	_guard()
 	due = frappe.get_doc("Realty Payment Due", due_id)
+	# Unlike its neighbours this endpoint checked nothing, so any logged-in user on this
+	# SHARED ERPNext box (no Realty role at all) could read payment data and write
+	# Communications against it.
+	due.check_permission("read")
 	# Real SMS/WhatsApp/email gateway is a production-build item — log a
 	# Communication so the action is recorded and auditable.
 	frappe.get_doc({
@@ -2145,11 +2397,26 @@ def send_reminder(due_id):
 @frappe.whitelist()
 def process_payout(partner):
 	_guard()
+	# Clearing a broker's payout moves money on paper — a manager decision, and one that
+	# must leave a trace. Previously any Sales Executive could zero it with no record of
+	# who did it, when, or how much.
+	if not _is_manager():
+		frappe.throw(_("Only a manager can process a payout."), frappe.PermissionError)
 	cp = frappe.get_doc("Realty Channel Partner", partner)
 	cp.check_permission("write")
-	cleared = cp.outstanding
+	cleared = frappe.utils.flt(cp.outstanding)
+	if not cleared:
+		return {"ok": True, "cleared": 0, "unchanged": True}
 	cp.outstanding = 0
 	cp.save()
+	frappe.get_doc({
+		"doctype": "Communication", "communication_type": "Communication",
+		"communication_medium": "Other", "sent_or_received": "Sent",
+		"subject": f"Payout processed — {cp.partner_name}",
+		"content": f"{frappe.utils.fmt_money(cleared)} cleared by "
+			f"{frappe.utils.get_fullname()} ({frappe.session.user}).",
+		"reference_doctype": "Realty Channel Partner", "reference_name": partner,
+	}).insert(ignore_permissions=True)
 	frappe.db.commit()
 	return {"ok": True, "cleared": cleared}
 
@@ -2162,20 +2429,16 @@ def schedule_visit(payload):
 	lead = frappe.get_doc("Realty Lead", {"lead_id": payload["lead"]}) \
 		if not frappe.db.exists("Realty Lead", payload.get("lead", "")) \
 		else frappe.get_doc("Realty Lead", payload["lead"])
-	vtime = (payload.get("time") or "11:00")
-	if len(vtime.split(":")) == 2:
-		vtime += ":00"
-	vdate = payload.get("date") or frappe.utils.nowdate()
-	doc = frappe.get_doc({
-		"doctype": "Realty Site Visit",
-		"visit_id": _next_id("Realty Site Visit", "visit_id", "VST-", 4),
+	vtime = _parse_time(payload.get("time"))
+	vdate = _parse_date(payload.get("date"))
+	doc = _insert_with_id(lambda vid: {
+		"doctype": "Realty Site Visit", "visit_id": vid,
 		"lead": lead.name, "project": lead.project, "sales_owner": lead.sales_owner,
 		"party_of": frappe.utils.cint(payload.get("partyOf")) or 1,
 		"visit_date": vdate, "visit_time": vtime,
 		"duration": 60, "mode": payload.get("mode") or "in-person",
 		"status": "confirmed", "notes": payload.get("notes"),
-	})
-	doc.insert()
+	}, "Realty Site Visit", "visit_id", "VST-", 4)
 	# reflect on the lead: next-visit date + an activity entry
 	lead.visit_on = vdate
 	lead.last_activity = frappe.utils.nowdate()
@@ -2193,9 +2456,17 @@ def create_project(payload):
 	_guard()
 	if isinstance(payload, str):
 		payload = frappe.parse_json(payload)
+	if not _is_manager():
+		frappe.throw(_("Only a manager can create a project."), frappe.PermissionError)
 	code = (payload.get("code") or "").strip().upper()
 	if not code or not payload.get("name"):
 		frappe.throw(_("Project code and name are required."))
+	# The code becomes the docname AND the prefix of every unit_id add_units mints, and it
+	# round-trips through the client as "P-<code>" — so spaces, punctuation and novel-length
+	# codes all break something downstream. Keep it short and alphanumeric.
+	if not re.fullmatch(r"[A-Z0-9]{2,10}", code):
+		frappe.throw(_("Project code must be 2–10 letters or digits, with no spaces "
+			"(you entered “{0}”).").format(code))
 	if frappe.db.exists("Realty Project", code):
 		frappe.throw(_("Project code {0} already exists.").format(code))
 	frappe.get_doc({
@@ -2229,9 +2500,11 @@ def add_units(payload):
 	``<CODE>-<TOWER>-<FL2><U2>``. Existing unit_ids are skipped (idempotent).
 	"""
 	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can add units."), frappe.PermissionError)
 	if isinstance(payload, str):
 		payload = frappe.parse_json(payload)
-	code = (payload.get("project") or "").replace("P-", "", 1)
+	code = _pcode(payload.get("project"))
 	if not frappe.db.exists("Realty Project", code):
 		frappe.throw(_("Project {0} not found.").format(code))
 	tower = (payload.get("tower") or "A").strip().upper()
@@ -2255,7 +2528,9 @@ def add_units(payload):
 				frappe.throw(_("Floors above 99 are not supported."))
 			templates = []
 			for r in (b.get("rows") or []):
-				cnt = frappe.utils.cint(r.get("count")) or 1
+				# `cint(...) or 1` turned an explicit count of 0 into 1, which made the
+				# `cnt < 1` guard below unreachable for zero and silently minted a unit.
+				cnt = frappe.utils.cint(r.get("count")) if r.get("count") is not None else 1
 				if cnt < 1:
 					continue
 				fc = r.get("facing")
@@ -2278,6 +2553,10 @@ def add_units(payload):
 		per_floor = frappe.utils.cint(payload.get("unitsPerFloor")) or 4
 		if per_floor > 99:
 			frappe.throw(_("A floor cannot have more than 99 units."))
+		# the granular branch bounds floors at 99; without the same bound here the
+		# f"{fl:02d}{u:02d}" scheme overflows into 5-digit unit numbers (e.g. "10001")
+		if floors < 1 or floors > 99:
+			frappe.throw(_("Floors must be between 1 and 99."))
 		typ = payload.get("typology") or "2 BHK"
 		carpet = frappe.utils.flt(payload.get("carpet")) or 700
 		price = frappe.utils.flt(payload.get("price")) or 5000000

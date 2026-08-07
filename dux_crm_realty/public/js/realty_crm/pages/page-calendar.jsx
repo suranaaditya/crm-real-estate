@@ -17,7 +17,14 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
   const fmtISO = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const mondayOf = (iso) => { const d = new Date(iso + "T00:00:00"); const dow = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dow); return d; };
 
-  const me = (data.currentUser && data.currentUser.name) || (data.owners[0] && data.owners[0].name) || "";
+  const meName = (data.currentUser && data.currentUser.name) || "";
+  // Only reps appear in the owner <select>. A manager/director who is NOT a Realty Sales
+  // Owner (Vinita Aswani, the director login) has no matching option, so defaulting to
+  // their own name selected nothing and the calendar rendered permanently empty — with no
+  // way to recover, because the <select> showed a value it did not contain. Fall back to
+  // the team view for those logins.
+  const isRep = (data.owners || []).some(o => o.name === meName);
+  const me = isRep ? meName : EVERYONE;
   const [owner, setOwner] = React.useState(teamView ? EVERYONE : me);
   const [kind, setKind] = React.useState(initialKind);   // all | tasks | visits
   const [projectF, setProjectF] = React.useState("all"); // all | P-<code>
@@ -67,8 +74,17 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
     return { bg: "var(--neutral-100)", fg: "var(--neutral-600)" };
   };
 
-  const slots = []; for (let h = 8; h <= 19; h++) slots.push(h);
-  const itemsOn = (iso, h) => items.filter(it => it.date === iso && parseInt(it.time.split(":")[0]) === h);
+  // The grid used to run 08:00-19:59 only, so a 07:00 task or a 21:00 visit was counted in
+  // the KPI cards but rendered in no cell at all — silently invisible. Clamp anything
+  // outside the visible range into the first/last row instead of dropping it.
+  const FIRST_H = 8, LAST_H = 19;
+  const slots = []; for (let h = FIRST_H; h <= LAST_H; h++) slots.push(h);
+  const hourOf = (it) => {
+    const h = parseInt(String(it.time || "09:00").split(":")[0], 10);
+    if (isNaN(h)) return FIRST_H;
+    return Math.min(LAST_H, Math.max(FIRST_H, h));
+  };
+  const itemsOn = (iso, h) => items.filter(it => it.date === iso && hourOf(it) === h);
   const dayItems = items.filter(it => it.date === selectedDate).sort((a, b) => a.time.localeCompare(b.time));
 
   const openTasks = items.filter(it => it.kind === "task" && !it.done);
@@ -153,7 +169,7 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
             {slots.map(h => (
               <React.Fragment key={h}>
                 <div style={{ padding: "8px 10px", fontSize: 10, fontFamily: "var(--font-mono)", fontWeight: 600, color: "var(--neutral-400)", textAlign: "right", borderTop: "1px solid var(--hairline)", background: "var(--neutral-50)" }}>
-                  {h > 12 ? `${h - 12} PM` : `${h} AM`}
+                  {h === 12 ? "12 PM" : h > 12 ? `${h - 12} PM` : `${h} AM`}
                 </div>
                 {weekDays.map(d => (
                   <div key={d.date + h} style={{ minHeight: 54, borderTop: "1px solid var(--hairline)", borderLeft: "1px solid var(--hairline)", padding: 4, background: d.today ? "rgba(242,169,59,0.04)" : "transparent" }}>
@@ -175,11 +191,11 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "80px 1fr", background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, overflow: "hidden" }}>
               {slots.map(h => {
-                const its = dayItems.filter(it => parseInt(it.time.split(":")[0]) === h);
+                const its = dayItems.filter(it => hourOf(it) === h);
                 return (
                   <React.Fragment key={h}>
                     <div style={{ padding: "16px 12px", borderTop: h === 8 ? "none" : "1px solid var(--hairline)", background: "var(--neutral-50)", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, color: "var(--neutral-600)" }}>
-                      {h > 12 ? `${h - 12}:00 PM` : `${h}:00 AM`}
+                      {h === 12 ? "12:00 PM" : h > 12 ? `${h - 12}:00 PM` : `${h}:00 AM`}
                     </div>
                     <div style={{ padding: 10, borderTop: h === 8 ? "none" : "1px solid var(--hairline)", minHeight: 56, display: "flex", flexDirection: "column", gap: 8 }}>
                       {its.map(it => <ItemCard key={it.kind + it.id} it={it} />)}

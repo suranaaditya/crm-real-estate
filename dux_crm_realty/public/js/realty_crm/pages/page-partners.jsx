@@ -29,7 +29,7 @@ window.PagePartners = function PagePartners() {
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
           <StatCard label="ACTIVE PARTNERS" value={partners.length} icon="users" />
-          <StatCard label="TOTAL LEADS" value={totalLeads} delta="+22% QoQ" icon="chart" />
+          <StatCard label="TOTAL LEADS" value={totalLeads} icon="chart" />
           <StatCard label="BOOKINGS" value={totalBookings} icon="check" />
           <StatCard label="PAYOUTS DUE" value={fmtINR(totalOutstanding)} deltaTone="down" delta={"of " + fmtINR(totalCommission)} icon="rupee" />
         </div>
@@ -79,10 +79,10 @@ window.PagePartners = function PagePartners() {
                   <div style={{ display: "flex", gap: 8 }}>
                     <Btn variant="ghost" size="sm">View leads</Btn>
                     <Btn variant="outline" size="sm" onClick={async () => {
-                      if (!p.outstanding) { frappe.show_alert("No outstanding payout for " + p.name); return; }
+                      if (!p.outstanding) { frappe.show_alert("No outstanding payout for " + esc(p.name)); return; }
                       try {
                         const r = await frappe.call({ method: "dux_crm_realty.api.crm.process_payout", args: { partner: p.id } });
-                        frappe.show_alert({ message: "Cleared " + fmtINR(r.message.cleared) + " to " + p.name, indicator: "green" });
+                        frappe.show_alert({ message: "Cleared " + fmtINR(r.message.cleared) + " to " + esc(p.name), indicator: "green" });
                         if (window.__refreshCRM) await window.__refreshCRM();
                       } catch (e) { frappe.msgprint(e.message || "Could not process payout"); }
                     }}>Process payout</Btn>
