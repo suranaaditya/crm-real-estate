@@ -66,7 +66,8 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
   const matchUnit = (u) => {
     if (!unitQuery) return true;
     const held = (u.holds || []).map(h => `${h.leadName || ""} ${h.contactName || ""} ${h.requestedBy || ""}`).join(" ");
-    return `${u.id} ${u.num} ${u.typology} ${u.status} ${held}`.toLowerCase().includes(unitQuery);
+    // remarks too, so "furnished" / "front" finds the client's own descriptions
+    return `${u.id} ${u.num} ${u.typology} ${u.status} ${u.remarks || ""} ${held}`.toLowerCase().includes(unitQuery);
   };
   const matchCount = unitQuery ? allUnits.filter(matchUnit).length : null;
 
@@ -199,7 +200,9 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
             <div className="dux-eyebrow" style={{ fontSize: 10 }}>{proj.code} · {proj.type}</div>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, marginTop: 4 }}>{proj.name}</div>
             <div style={{ fontSize: 12, color: "var(--neutral-400)", marginTop: 2 }}>
-              {proj.locality}, {proj.city} · {proj.typology} · {proj.towers} tower{proj.towers > 1 ? "s" : ""} · Possession {proj.possession}
+              {[[proj.locality, proj.city].filter(Boolean).join(", "), proj.typology,
+                proj.towers ? proj.towers + " tower" + (proj.towers > 1 ? "s" : "") : null,
+                proj.possession ? "Possession " + proj.possession : null].filter(Boolean).join(" · ") || "Details not provided yet"}
             </div>
             <div style={{ marginTop: 12 }}>
               {isManager && <Btn variant="accent" size="sm" icon="plus" onClick={() => setShowUnitsModal(true)}>Add units</Btn>}
@@ -210,7 +213,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
           <ProjStat label="BLOCKED" value={proj.blocked || 0} />
           <ProjStat label="RESERVED" value={proj.reserved || 0} />
           <ProjStat label="SOLD" value={proj.sold} accent />
-          <ProjStat label="PRICE BAND" value={`${(proj.priceFrom / 10000000).toFixed(2)}–${(proj.priceTo / 10000000).toFixed(2)} Cr`} mono />
+          <ProjStat label="PRICE BAND" value={priceBand(proj)} mono />
         </div>
 
         {/* Manager approvals — pending hold/reserve requests for this project */}
@@ -312,7 +315,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
               return (
                 <div key={tower} style={{ marginBottom: 32 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
-                    <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700 }}>Tower {tower}</div>
+                    <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700 }}>{tower ? "Tower " + tower : proj.name}</div>
                     <div style={{ fontSize: 12, color: "var(--neutral-400)" }}>{(filter === "all" && !unitQuery) ? Object.values(floors).flat().length + " units" : towerVisible + " shown"}</div>
                   </div>
                   <div style={{
@@ -320,7 +323,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
                     display: "flex", flexDirection: "column", gap: 6,
                   }}>
                     {sortedFloors.map(f => {
-                      const units = (floors[f] || []).slice().sort((a, b) => (a.num || a.unit || "").localeCompare(b.num || b.unit || ""));
+                      const units = (floors[f] || []).slice().sort((a, b) => String(a.num || "").localeCompare(String(b.num || ""), undefined, { numeric: true }));
                       const visible = units.filter(u => (filter === "all" || u.status === filter) && matchUnit(u));
                       if ((filter !== "all" || unitQuery) && visible.length === 0) return null;
                       return (
@@ -329,7 +332,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
                             fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700,
                             color: "var(--neutral-600)", textAlign: "right",
                           }}>
-                            FL {f.toString().padStart(2, "0")}
+                            {floorLabel(f)}
                           </div>
                           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                             {visible.map(u => {
@@ -351,7 +354,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
                                        transition: "box-shadow 150ms var(--ease-standard)",
                                      }}>
                                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, color: sc.fg }}>
-                                    {u.tower}-{u.num}
+                                    {unitLabel(u)}
                                   </div>
                                   <div style={{ fontSize: 10, color: "var(--neutral-600)", marginTop: 2 }}>{u.typology}</div>
                                 </div>
@@ -378,9 +381,10 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
             <div>
               <div style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 700 }}>
-                Tower {liveSelected.tower} · {liveSelected.num}
+                {liveSelected.tower ? "Tower " + liveSelected.tower + " · " + liveSelected.num : liveSelected.num}
               </div>
-              <div style={{ fontSize: 12, color: "var(--neutral-400)" }}>{liveSelected.typology} · {liveSelected.facing} facing</div>
+              <div style={{ fontSize: 12, color: "var(--neutral-400)" }}>{[liveSelected.typology, floorLabel(liveSelected.floor).replace("FL ", "Floor "), liveSelected.facing ? liveSelected.facing + " facing" : null].filter(Boolean).join(" · ")}</div>
+              {liveSelected.remarks && <div style={{ fontSize: 12, color: "var(--neutral-600)", marginTop: 4 }}>{liveSelected.remarks}</div>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{
@@ -394,10 +398,11 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 12, marginBottom: 14 }}>
-            <KV label="Carpet" value={liveSelected.carpet + " sqft"} />
-            <KV label="Price" value={fmtINR(liveSelected.price)} />
-            <KV label="Rate/sqft" value={"₹ " + Math.round(liveSelected.price / liveSelected.carpet).toLocaleString("en-IN")} />
-            <KV label="All-in" value={fmtINR(Math.round(liveSelected.price * 1.08))} />
+            <KV label="Carpet" value={liveSelected.carpet ? liveSelected.carpet.toLocaleString("en-IN") + " sqft" : "—"} />
+            <KV label="Built-up" value={liveSelected.builtUp ? liveSelected.builtUp.toLocaleString("en-IN") + " sqft" : "—"} />
+            {/* price is often not set yet on real stock — never derive a rate from a null */}
+            <KV label="Price" value={liveSelected.price > 0 ? fmtINR(liveSelected.price) : "Not set"} />
+            <KV label="Rate/sqft" value={liveSelected.price > 0 && liveSelected.carpet > 0 ? "₹ " + Math.round(liveSelected.price / liveSelected.carpet).toLocaleString("en-IN") : "—"} />
           </div>
           {(() => {
             const holds = liveSelected.holds || [];

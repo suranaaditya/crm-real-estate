@@ -62,9 +62,17 @@ window.PageBookings = function PageBookings() {
               </button>
             );
           })}
+          {data.bookings.length === 0 && (
+            <div style={{ padding: "32px 20px", fontSize: 13, color: "var(--neutral-400)" }}>No bookings yet.</div>
+          )}
         </div>
       </div>
 
+      {!booking && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", color: "var(--neutral-400)", fontSize: 13 }}>
+          {data.bookings.length === 0 ? "Bookings and their cost sheets will show here." : "Select a booking to see its cost sheet."}
+        </div>
+      )}
       {booking && (
         <div style={{ overflow: "auto", padding: 28 }}>
           <div className="dux-eyebrow" style={{ fontSize: 10, color: "var(--dux-amber-600)" }}>BOOKING · {booking.id}</div>

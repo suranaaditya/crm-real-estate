@@ -195,9 +195,12 @@ doctypes, so it won't apply field/option changes to a live site).
   `frappe.require("/assets/dux_crm_realty/css/realty_crm.css")`. Do **NOT** `import` it from the
   bundle — `frappe.require` loads the JS but does not inject CSS esbuild extracts from a JS import
   (symptom: all `:root` tokens empty → totally unstyled "missing background").
-- **Pinned demo date:** the app's "today" is **2026-04-29** (`get_bootstrap()["today"]`, seed dates,
-  `fmtRelative`, calendar anchors). New visits/tasks default their date to `CRM_DATA.today + N` so they
-  land in the visible calendar week. Change in one place to go real-time (will empty the demo views).
+- **"Today" is the REAL date (since 29 Sep 2026).** `get_bootstrap()["today"]` =
+  `frappe.utils.nowdate()` in the site time zone (Asia/Kolkata) and is the ONLY source: every screen
+  reads it via `window.todayISO()` (shell.jsx; browser clock only as a pre-bootstrap fallback) or
+  `data.today`. The old pin (2026-04-29) was also hardcoded in the dashboard banner, `fmtRelative`,
+  Payments and three fallbacks — don't reintroduce a literal date anywhere. `fmtRelative` compares
+  calendar days (`slice(0,10)`), so datetimes and dates mix safely.
 - **Reserved Frappe fieldnames avoided:** use `sales_owner` (not `owner`), `lead_created` (not
   `creation`). "Entered by" = the doc's built-in `owner` (creator), surfaced as `enteredBy`.
 - **Assignment model:** lead capture has NO assign field. `create_lead` records the creator and
@@ -235,8 +238,6 @@ doctypes, so it won't apply field/option changes to a live site).
   `…/download_document?document=<id>` in a new tab (desk session cookie carries auth; GET needs no CSRF).
   Shared DMS UI globals live across files: `__uploadDocument`/`UploadDocumentModal`/`RequestShareModal`
   (forms.jsx), `downloadDocument`/`copyShareLink`/`fmtBytes`/`ShareHistoryModal` (lead-detail.jsx).
-- **`uploaded_on` shows as "in N d"** in the demo because file timestamps are the REAL clock while the app's
-  pinned "today" is 2026-04-29 (`fmtRelative` is relative to the pin). Cosmetic; consistent with the pin.
 - **AI email = local Gemma, not a cloud LLM.** `draft_email`/`improve_text` POST to the Ollama box
   (`ollama_url` in site_config). Calls take ~2–25s (warm) and can cold-load ~12s — the composer shows a
   "Drafting…" state; don't lower the `requests` timeout (120s) below that. Output is reviewed/edited by the
@@ -283,6 +284,27 @@ doctypes, so it won't apply field/option changes to a live site).
   **100% sold** on Reports. This is the same class as the already-fixed dashboard `soldPct`;
   when you fix one divide-by-zero, grep for the others (`page-reports.jsx`,
   `page-dashboard.jsx` funnel `Math.max(...)`).
+- **Frappe fills an EMPTY Select with its first option on insert.** Loading units with no facing
+  silently stored 224 of them as "East". Optional Selects need a leading blank option
+  (`"\nEast\nWest…"`) — `Realty Unit.facing` has one now. Check any other optional Select before
+  bulk-inserting.
+- **`fetch_from` overwrites whatever you set** unless the field has `fetch_if_empty: 1`. Site Visit
+  `lead_name` fetches from the lead; importing visits replaced the actual visitor's name with the
+  lead record's name (and broke the importer's de-dup key) until `fetch_if_empty` was added.
+- **Schema changes without `migrate`:** `frappe.reload_doc("dux_crm_realty", "doctype",
+  "<doctype_folder>", force=True)` in `bench console` syncs ONE doctype from its JSON (adds
+  columns, applies options/perms) — file → DB, the safe direction. Used for `built_up_area`,
+  `remarks`, `facing` options and `fetch_if_empty`. (Contrast `doc.save()` on a DocType, which
+  exports DB → file and once reverted a permission change.)
+- **Piping a script into `bench console` (`<<EOF`): don't define helper functions** that read
+  top-level variables — IPython runs each statement separately and the function raises
+  `NameError` (a whole delete script once no-op'd this way). Inline the logic, and put a blank
+  line after every `for` block so IPython closes it.
+- **Real stock is not prototype-shaped:** no tower (single commercial buildings), Basement /
+  Ground floors, no price. Use `unitLabel()`, `floorLabel()`, `priceBand()` from `shell.jsx`
+  instead of `` `${u.tower}-${u.num}` ``, `"FL " + f` or `priceFrom / 1e7`. `get_bootstrap` groups a
+  blank tower under `""` (a `None` key serialises as the string "null"). Never derive a rate or an
+  "all-in" figure from a missing price.
 - **Hold attribution identity is a known, documented limitation.** Actor identity comes from
   `_actor_owner()` (maps `frappe.session.user` → the `Realty Sales Owner.user` link, else falls back to
   the pinned persona). With ONE shared login (and reps not yet having Frappe Users) every actor
@@ -311,12 +333,49 @@ deliverables in `client-deliverables/` — **both git-ignored (PII)**.
   Payload is built LOCALLY by `scratchpad/build_import_payload.py` (all messy parsing —
   the Sell.do CSV has a column-shift fault on 331/379 rows — stays client-side).
   **Take a `bench backup` first; the wipe is not reversible.**
-- Demo Bookings / Payment Dues / Site Visits / Tasks were KEPT so those modules still
-  demonstrate; their `lead` links were nulled and owner links re-pointed to real reps
-  before deleting the demo leads (Frappe blocks deleting linked docs).
+- The demo Bookings / Payment Dues / Site Visits / Tasks were kept at first, then **deleted on
+  29 Sep 2026** along with everything else from the prototype (see below).
+- **Human ids of deleted demo leads were REUSED by imported real leads** (LD-2405, LD-2412, …).
+  Any leftover ledger row that still pointed at a demo lead id silently re-attached to a real
+  customer — that is how four test document shares ended up "shared" with real clients. When you
+  wipe demo data, wipe its ledgers (shares, holds, activities) too.
 - Real data exposed null-safety bugs the demo data hid (dashboard `lastActivity` sort,
   `soldPct` NaN on 0-unit projects) — **assume more lurk; guard before dereferencing.**
 - 6 client logins exist (see `client-deliverables/_credentials.json`, git-ignored).
+
+### Real inventory + site visits (loaded 28 Sep 2026)
+
+Source: Gautam Jain's 21-Aug reply to Vinita's "Data required for CRM App" thread — our own
+`CRM Data Request.xlsx` filled in (copy in `client-data/`, git-ignored). Loaded by
+`dux_crm_realty/import_inventory.py` (idempotent, `dry_run=1` rolls back; payload built locally by
+`scripts/build_inventory_payload.py` — usage in its docstring — same split as the lead importer):
+- **246 real units in 8 projects** — SBH 103, RCP 82, AN 34, SHH 10, RO 7, SAX 6, RRS 3, GUP 1.
+  Abhiman Niwas's 146 prototype demo units (72 "sold") were deleted and replaced. **Every unit is
+  Available and has no price** — the client hasn't sent prices or sold stock yet.
+- **Riaan Office (RO)** and **Shradha Busiplex Hinganghat (SBH, city Hinganghat)** are new projects.
+- **126 site visits** (Jan–Aug 2026). Matched to a lead only when the phone's last 10 digits hit
+  exactly one lead (100 of 126). Many visit phones are the **broker's**, reused across different
+  visitors — the visitor's own name is kept in `lead_name`. Each linked visit adds one `visit`
+  activity to the lead's timeline.
+- **Match projects by NAME, never by the client's short code**: their codes differ from ours
+  (RR/SH/SA) and their "GP" is our Gulab Palace (GUP), while our GP is a different project.
+- Unit ids for imported stock: `<CODE>-[<TOWER>-]<UNIT>` (spaces stripped); where the client reused
+  a unit number on another floor (SAX "FF", RO "FF"/"SF") both get `-F<floor>`. Floors: Basement =
+  -1, Ground/Mezzanine = 0. `Realty Unit` gained `built_up_area` and `remarks` for this data.
+- The gap list + a fill-in workbook for the client:
+  `client-deliverables/Shradha Realty CRM - Points to Check (Sep 2026).xlsx`.
+
+### All prototype/demo data removed (29 Sep 2026)
+
+Backup first: `20260929_100323-erp_jewonline_in-database.sql.gz` on the server. Deleted: the 5 demo
+projects (Green Park Residency, Green Estate Row Houses, Royal Commercia, Shradha Pinnacle,
+"Trial Name" — 43 units, 26 visits) via `delete_project`; all 6 demo bookings + 60 payment dues;
+18 demo tasks; 6 campaigns (fabricated spend/lead numbers); 6 more prototype visits; and 4 test
+documents from DMS verification (`delete_document`, which also killed 4 live public share links).
+What remains is ONLY client data: 20 projects, 246 units, 853 leads, 126 visits, 334 partners.
+**Bookings, Payments, Campaigns, Tasks and Documents are now legitimately empty** — those pages got
+"No … yet" empty states. There is still **no endpoint to create a booking or a campaign**
+(the "New campaign" button is inert) — the next build item, not a bug in the empty state.
 
 ## User management (Settings → Users & access)
 

@@ -12,6 +12,22 @@ window.esc = (s) => String(s == null ? "" : s)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
+// ---------- Inventory labels ----------
+// Real stock is not shaped like the prototype's: single-building commercial projects have
+// no tower, floors run Basement / Ground (stored -1 / 0), and prices are often not set yet.
+window.unitLabel = (u) => (u && u.tower ? u.tower + "-" + (u.num || "") : (u && u.num) || "");
+window.floorLabel = (f) => {
+  const n = Number(f);
+  if (n < 0) return n === -1 ? "BASEMENT" : "B" + Math.abs(n);
+  if (n === 0) return "GROUND";
+  return "FL " + String(n).padStart(2, "0");
+};
+window.priceBand = (p) => {
+  if (!p || !(p.priceFrom > 0)) return "Not set";
+  if (!(p.priceTo > 0) || p.priceTo === p.priceFrom) return fmtINR(p.priceFrom);
+  return fmtINR(p.priceFrom) + " – " + fmtINR(p.priceTo);
+};
+
 window.fmtINR = (n) => {
   if (n == null) return "—";
   if (n >= 10000000) return "₹ " + (n / 10000000).toFixed(2).replace(/\.00$/, "") + " Cr";
@@ -23,11 +39,20 @@ window.fmtDate = (iso) => {
   const d = new Date(iso);
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 };
+// "today" is the server's date in the site time zone (get_bootstrap), so every screen agrees
+// on one day; the browser clock is only a fallback before the bootstrap has loaded.
+window.todayISO = () => {
+  if (window.CRM_DATA && window.CRM_DATA.today) return window.CRM_DATA.today;
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 window.fmtRelative = (iso) => {
   if (!iso) return "—";
-  const today = new Date("2026-04-29");
-  const d = new Date(iso);
-  const diff = Math.round((d - today) / 86400000);
+  // compare calendar days only: a datetime ("2026-09-28 14:22:05") and a date both reduce to
+  // YYYY-MM-DD at UTC midnight, so the difference is always a whole number of days
+  const day = (s) => new Date(String(s).slice(0, 10) + "T00:00:00Z");
+  const diff = Math.round((day(iso) - day(window.todayISO())) / 86400000);
+  if (isNaN(diff)) return "—";
   if (diff === 0) return "Today";
   if (diff === 1) return "Tomorrow";
   if (diff === -1) return "Yesterday";

@@ -65,11 +65,10 @@ window.PageReports = function PageReports() {
     <div style={{ flex: 1, overflow: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         <div>
-          <div className="dux-eyebrow" style={{ fontSize: 10 }}>FY 2025-26 · Q1</div>
+          <div className="dux-eyebrow" style={{ fontSize: 10 }}>{"ALL TIME · AS OF " + fmtDate(data.today).toUpperCase()}</div>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, marginTop: 4 }}>Reports & Analytics</div>
         </div>
         <div style={{ flex: 1 }} />
-        <select className="dux-input" style={{ width: 180 }} defaultValue="quarter"><option value="quarter">This quarter</option><option>Last 6 months</option><option>YTD</option></select>
         <Btn variant="outline" size="sm" icon="files">Export PDF</Btn>
       </div>
 
@@ -109,7 +108,7 @@ window.PageReports = function PageReports() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
         {/* Source breakdown */}
-        <Panel title="Lead sources" subtitle="Q1 FY26">
+        <Panel title="Lead sources" subtitle="ALL LEADS">
           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 24, alignItems: "center" }}>
             <DonutChart data={sourceRows.map(([k, v], i) => ({ label: k, value: v, color: sourcePalette[i % sourcePalette.length] }))} total={sourceTotal} />
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

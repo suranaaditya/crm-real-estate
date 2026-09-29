@@ -235,7 +235,8 @@ def get_bootstrap():
 	# ---- inventory grids (ALL projects) keyed by prototype project id "P-<code>" ----
 	units_raw = frappe.get_all("Realty Unit", fields=[
 		"unit_id", "project", "tower", "floor", "unit_no", "typology", "carpet_area",
-		"facing", "price", "status"], order_by="project asc, tower asc, floor asc, unit_no asc")
+		"built_up_area", "facing", "price", "status", "remarks"],
+		order_by="project asc, tower asc, floor asc, unit_no asc")
 	unit_proj = {u.unit_id: _pid(u.project) for u in units_raw}
 
 	# active holds (Requested/Approved) — ONE batched query, grouped by unit, so the
@@ -328,11 +329,14 @@ def get_bootstrap():
 	grids = {}
 	floor7b = []
 	for u in units_raw:
-		unit = {"id": u.unit_id, "tower": u.tower, "floor": u.floor, "num": u.unit_no,
-			"typology": u.typology, "carpet": u.carpet_area, "facing": u.facing,
-			"price": u.price, "status": (u.status or "").lower(),
-			"holds": holds_by_unit.get(u.unit_id, [])}
-		grids.setdefault(_pid(u.project), {}).setdefault(u.tower, {}).setdefault(u.floor, []).append(unit)
+		# Real stock often has no tower (a single commercial building) and no price yet.
+		# Group a blank tower under "" — a None key would serialise to the string "null"
+		# and render as "Tower null"; a None floor would vanish from the floor grid.
+		unit = {"id": u.unit_id, "tower": u.tower or "", "floor": u.floor or 0, "num": u.unit_no,
+			"typology": u.typology, "carpet": u.carpet_area, "builtUp": u.built_up_area,
+			"facing": u.facing, "price": u.price, "status": (u.status or "").lower(),
+			"remarks": u.remarks, "holds": holds_by_unit.get(u.unit_id, [])}
+		grids.setdefault(_pid(u.project), {}).setdefault(u.tower or "", {}).setdefault(u.floor or 0, []).append(unit)
 		if u.project == "AN" and u.tower == "B" and u.floor == 7:
 			floor7b.append(unit)
 	grid = grids.get("P-AN", {})  # back-compat alias (abhimanGrid)
@@ -427,7 +431,9 @@ def get_bootstrap():
 	focused = next((l for l in leads if l["id"] == "LD-2400"), leads[0] if leads else None)
 
 	return {
-		"today": "2026-04-29",
+		# the real date in the site time zone (System Settings: Asia/Kolkata). The UI takes
+		# "today" ONLY from here, so every screen agrees on one day.
+		"today": frappe.utils.nowdate(),
 		# NOTE: only the boolean belongs here — the user roster stays admin-only
 		# behind list_crm_users().
 		"currentUser": {**_current_owner(), "isManager": _is_manager(),

@@ -12,7 +12,7 @@ const EVERYONE = "__all__";   // owner-selector sentinel: show the whole team's 
 
 window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = false }) {
   const data = window.CRM_DATA;
-  const TODAY = data.today || "2026-04-29";
+  const TODAY = window.todayISO();
   const pad = (n) => String(n).padStart(2, "0");
   const fmtISO = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const mondayOf = (iso) => { const d = new Date(iso + "T00:00:00"); const dow = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dow); return d; };
@@ -59,9 +59,9 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
       priority: t.priority, done: t.done, leadId: t.leadId, raw: t,
     }));
     if (kind !== "tasks") (data.visits || []).filter(v => mineV(v) && inProj(v.project)).forEach(v => out.push({
-      id: v.id, date: v.date, time: (v.time || "11:00").slice(0, 5), kind: "visit",
+      id: v.id, date: v.date, time: (v.time || "").slice(0, 5), kind: "visit",
       title: v.leadName, type: "Site visit",
-      sub: (v.projectName || "Site visit") + " · party of " + v.partyOf + (v.status ? " · " + v.status : ""),
+      sub: [v.projectName || "Site visit", v.partyOf ? "party of " + v.partyOf : null, v.status || null].filter(Boolean).join(" · "),
       status: v.status, leadId: v.leadId, raw: v,
     }));
     return out;
@@ -80,7 +80,8 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
   const FIRST_H = 8, LAST_H = 19;
   const slots = []; for (let h = FIRST_H; h <= LAST_H; h++) slots.push(h);
   const hourOf = (it) => {
-    const h = parseInt(String(it.time || "09:00").split(":")[0], 10);
+    // untimed items (historical visits carry no time) sit in the first row, not a made-up hour
+    const h = parseInt(String(it.time || "").split(":")[0], 10);
     if (isNaN(h)) return FIRST_H;
     return Math.min(LAST_H, Math.max(FIRST_H, h));
   };
@@ -105,7 +106,7 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
         style={{ background: tone.bg, borderLeft: `3px solid ${tone.fg}`, borderRadius: compact ? 4 : 8, padding: compact ? "4px 6px" : "10px 12px", cursor: clickable ? "pointer" : "default", marginBottom: compact ? 2 : 0, opacity: it.done ? 0.55 : 1 }}>
         <div style={{ display: "flex", alignItems: "center", gap: compact ? 4 : 8 }}>
           {!compact && <Icon name={CAL_ICON[it.type] || "note"} size={14} style={{ color: tone.fg }} />}
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: compact ? 9 : 11, color: tone.fg, fontWeight: 700 }}>{it.time}</span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: compact ? 9 : 11, color: tone.fg, fontWeight: 700 }}>{it.time || "—"}</span>
           {it.kind === "task" && it.done && <Icon name="check" size={compact ? 9 : 12} style={{ color: "var(--success)" }} />}
         </div>
         <div style={{ fontSize: compact ? 11 : 13, fontWeight: 600, color: "var(--neutral-800)", textDecoration: it.done ? "line-through" : "none", lineHeight: 1.25, marginTop: compact ? 0 : 2 }}>{it.title}</div>

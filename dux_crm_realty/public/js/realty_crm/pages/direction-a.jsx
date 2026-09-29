@@ -58,7 +58,7 @@ window.DirectionA = function Workspace({ density = "comfortable", defaultView = 
 
   const kpi = aUseMemo(() => {
     const all = data.leads, closed = ["booked", "lost"];
-    const today = new Date((data.today || "2026-04-29") + "T00:00:00");
+    const today = new Date(window.todayISO() + "T00:00:00");
     const visitsWeek = (data.visits || []).filter(v => { const d = new Date(v.date + "T00:00:00"); const diff = (d - today) / 86400000; return diff >= -3 && diff <= 7; }).length;
     const booked = all.filter(l => l.stage === "booked").length;
     return {
@@ -225,7 +225,9 @@ function TableView({ leads, totalCount, density, rowH, selected, setSelected, so
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             {selected.size > 0 && <>
-              <Btn variant="soft" size="sm" icon="users" onClick={() => { setBulkOwner(""); setReassignOpen(true); }}>Reassign</Btn>
+              {/* bulk_reassign is manager-only server-side */}
+              {window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.isManager &&
+                <Btn variant="soft" size="sm" icon="users" onClick={() => { setBulkOwner(""); setReassignOpen(true); }}>Reassign</Btn>}
               <Btn variant="soft" size="sm" icon="mail" onClick={() => frappe.show_alert("Bulk SMS/WhatsApp uses a messaging gateway — a production-build step.")}>Bulk message</Btn>
             </>}
             <Btn variant="ghost" size="sm" icon="download" onClick={exportCsv}>Export</Btn>
@@ -296,7 +298,7 @@ function TableView({ leads, totalCount, density, rowH, selected, setSelected, so
                   </Td>
                   <Td><span style={{ fontSize: 12, color: "var(--neutral-600)" }}>{fmtRelative(l.lastActivity)}</span></Td>
                   <Td>{l.visitOn ? <span style={{ fontSize: 12, color: "var(--dux-amber-600)", fontWeight: 600 }}>{fmtRelative(l.visitOn)}</span> : <span style={{ color: "var(--neutral-300)" }}>—</span>}</Td>
-                  <Td><span style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>{fmtINR(l.budget)}</span></Td>
+                  <Td><span style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600 }}>{l.budget > 0 ? fmtINR(l.budget) : "—"}</span></Td>
                   <Td onClick={(e) => e.stopPropagation()}>
                     <div style={{ position: "relative" }}>
                       <button onClick={() => setMenuFor(menuFor === l.id ? null : l.id)} style={{ ...iconBtn, width: 28, height: 28, border: "none" }}><Icon name="dots" size={16} /></button>
@@ -424,7 +426,7 @@ function KanCard({ lead, density, onClick }) {
         <strong>{lead.interest}</strong> at {lead.projectName}
       </div>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600, color: "var(--dux-navy)", marginBottom: 10 }}>
-        {fmtINR(lead.budget)}
+        {lead.budget > 0 ? fmtINR(lead.budget) : "No budget"}
       </div>
       <div style={{
         display: "flex", justifyContent: "space-between", alignItems: "center",

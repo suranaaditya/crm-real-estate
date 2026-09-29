@@ -105,10 +105,13 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
             </label>
             <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={drawerLbl}>Assign to</span>
-              <select value={owner} onChange={(e) => changeOwner(e.target.value)} style={drawerSelect}>
-                <option value="">Unassigned</option>
-                {data.owners.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
-              </select>
+              {/* reassign_lead is manager-only server-side; don't offer a control that 403s */}
+              {data.currentUser && data.currentUser.isManager
+                ? <select value={owner} onChange={(e) => changeOwner(e.target.value)} style={drawerSelect}>
+                    <option value="">Unassigned</option>
+                    {data.owners.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+                  </select>
+                : <span style={{ fontSize: 13, color: "var(--neutral-800)" }}>{owner || "Unassigned"}</span>}
             </label>
           </div>
         </div>
@@ -116,7 +119,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
         {/* Key facts grid */}
         <div style={{ padding: "16px 24px", display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, borderBottom: "1px solid var(--hairline)" }}>
           <Fact label="Project"   value={project?.name} sub={project?.locality} />
-          <Fact label="Interest"  value={lead.interest} sub={"Budget " + fmtINR(lead.budget)} />
+          <Fact label="Interest"  value={lead.interest} sub={lead.budget > 0 ? "Budget " + fmtINR(lead.budget) : "Budget not given"} />
           <Fact label="Source"    value={lead.source}   sub={lead.channelPartnerName || "Direct"} />
           <Fact label="Entered by" value={lead.enteredBy || "—"} sub={owner ? ("Owner: " + owner) : "Unassigned"} />
         </div>
@@ -144,7 +147,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
         <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
           {tab === "activity" && <ActivityTab lead={lead} activities={activities} setActivities={setActivities} />}
           {tab === "tasks" && <TasksTab lead={lead} owners={data.owners} />}
-          {tab === "units" && <UnitsTab inv={data.inventory[lead.project]} lead={lead} />}
+          {tab === "units" && <UnitsTab lead={lead} />}
           {tab === "docs" && <DocsTab lead={lead} />}
           {tab === "pricing" && <PricingTab lead={lead} />}
         </div>
@@ -230,9 +233,8 @@ function LogActivityModal({ modal, onClose, lead, onLogged }) {
 // ---------- Schedule visit modal ----------
 function ScheduleVisitModal({ open, onClose, lead, onLogged }) {
   const defaultDate = () => {
-    // anchor to the app's reference "today" so a new visit lands in the
-    // currently-visible calendar week (the demo timeline is pinned, not real-time)
-    const base = (window.CRM_DATA && window.CRM_DATA.today) || "2026-04-29";
+    // two days out from the app's "today" (the server's date, site time zone)
+    const base = window.todayISO();
     const d = new Date(base + "T00:00:00");
     d.setDate(d.getDate() + 2);
     const p = (n) => String(n).padStart(2, "0");
@@ -544,34 +546,52 @@ function TaskRow({ t, onToggle }) {
   );
 }
 
-function UnitsTab({ inv, lead }) {
-  if (!inv) return <div style={{ color: "var(--neutral-400)", fontSize: 14 }}>No inventory loaded for this project.</div>;
+function UnitsTab({ lead }) {
+  // Units of the lead's project, from the live inventory grid. (This used to render the
+  // prototype's hardcoded "Tower B · Floor 7" strip and badge unit B-705 as "Customer
+  // favourite" for every lead.)
+  const data = window.CRM_DATA;
+  const grid = (data.grids || {})[lead.project];
+  const all = grid ? Object.values(grid).flatMap(fl => Object.values(fl).flat()) : [];
+  const [showAll, setShowAll] = ldUseState(false);
+  if (!lead.project) return <div style={{ color: "var(--neutral-400)", fontSize: 14 }}>This lead has no project yet.</div>;
+  if (!all.length) return <div style={{ color: "var(--neutral-400)", fontSize: 14 }}>No units have been loaded for {lead.projectName || "this project"} yet.</div>;
+  const avail = all.filter(u => u.status === "available");
+  const list = (showAll ? all : avail).slice().sort((a, b) =>
+    (a.floor - b.floor) || String(a.num || "").localeCompare(String(b.num || ""), undefined, { numeric: true }));
+  const tones = {
+    available: { bg: "var(--success-bg)",   fg: "var(--success)",   bd: "rgba(58,143,90,0.3)" },
+    blocked:   { bg: "var(--dux-amber-100)", fg: "var(--dux-amber-600)", bd: "rgba(242,169,59,0.4)" },
+    reserved:  { bg: "var(--info-bg)",       fg: "var(--info)",      bd: "rgba(47,110,181,0.3)" },
+    sold:      { bg: "var(--neutral-100)",  fg: "var(--neutral-600)", bd: "var(--hairline)" },
+  };
   return (
     <div>
-      <div className="dux-eyebrow" style={{ fontSize: 10, marginBottom: 12 }}>Tower B · Floor 7 · {lead.projectName}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <div className="dux-eyebrow" style={{ fontSize: 10, flex: 1 }}>
+          {lead.projectName} · {avail.length} available of {all.length}
+        </div>
+        {avail.length !== all.length && (
+          <button onClick={() => setShowAll(v => !v)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: 11, fontWeight: 600, color: "var(--dux-amber-600)" }}>
+            {showAll ? "Show available only" : "Show all units"}
+          </button>
+        )}
+      </div>
+      {!list.length && <div style={{ color: "var(--neutral-400)", fontSize: 14 }}>Nothing is available in this project right now.</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
-        {inv.units.map(u => {
-          const tones = {
-            available: { bg: "var(--success-bg)",   fg: "var(--success)",   bd: "rgba(58,143,90,0.3)" },
-            blocked:   { bg: "var(--dux-amber-100)", fg: "var(--dux-amber-600)", bd: "rgba(242,169,59,0.4)" },
-            reserved:  { bg: "var(--info-bg)",       fg: "var(--info)",      bd: "rgba(47,110,181,0.3)" },
-            sold:      { bg: "var(--neutral-100)",  fg: "var(--neutral-600)", bd: "var(--hairline)" },
-          };
+        {list.map(u => {
           const t = tones[u.status] || tones.available;
-          const isFav = u.id === "B-705";
           return (
-            <div key={u.id} style={{
-              border: "1.5px solid " + (isFav ? "var(--dux-amber)" : t.bd),
-              background: isFav ? "var(--dux-amber-100)" : t.bg,
-              borderRadius: 10, padding: 12,
-            }}>
+            <div key={u.id} style={{ border: "1.5px solid " + t.bd, background: t.bg, borderRadius: 10, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-                <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14 }}>{u.tower}-{u.num}</div>
+                <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14 }}>{unitLabel(u)}</div>
                 <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", color: t.fg, textTransform: "uppercase" }}>{u.status}</span>
               </div>
-              <div style={{ fontSize: 12, color: "var(--neutral-600)", marginBottom: 8 }}>{u.typology} · {u.carpet} sqft · {u.facing}</div>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: 13, fontWeight: 600 }}>{fmtINR(u.price)}</div>
-              {isFav && <div style={{ fontSize: 10, color: "var(--dux-amber-600)", fontWeight: 700, marginTop: 6, letterSpacing: "0.04em", textTransform: "uppercase" }}>★ Customer favourite</div>}
+              <div style={{ fontSize: 12, color: "var(--neutral-600)", marginBottom: 8 }}>
+                {[u.typology, floorLabel(u.floor).replace("FL ", "Floor "), u.carpet ? Math.round(u.carpet) + " sqft" : null, u.facing].filter(Boolean).join(" · ")}
+              </div>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: 13, fontWeight: 600 }}>{u.price > 0 ? fmtINR(u.price) : "Price not set"}</div>
+              {u.remarks && <div style={{ fontSize: 11, color: "var(--neutral-500)", marginTop: 4 }}>{u.remarks}</div>}
             </div>
           );
         })}

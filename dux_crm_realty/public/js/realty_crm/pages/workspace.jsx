@@ -41,7 +41,7 @@ window.Workspace = function Workspace({ density = "comfortable", defaultView = "
     payments:  { title: "Payments",       subtitle: "COLLECTIONS & SCHEDULE" },
     partners:  { title: "Channel Partners", subtitle: "BROKER NETWORK" },
     campaigns: { title: "Campaigns",      subtitle: "WHATSAPP · EMAIL · SMS" },
-    reports:   { title: "Reports & Analytics", subtitle: "Q1 FY26" },
+    reports:   { title: "Reports & Analytics", subtitle: "ALL TIME" },
     settings:  { title: "Settings",       subtitle: "WORKSPACE PREFERENCES" },
   };
   const meta = pageMeta[activePage] || pageMeta.leads;

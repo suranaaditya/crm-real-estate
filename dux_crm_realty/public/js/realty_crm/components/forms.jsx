@@ -941,7 +941,7 @@ window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initi
     </div>
   );
   return (
-    <Modal open={open} onClose={onClose} eyebrow="REQUEST" title={"Request " + kind.toLowerCase() + " · " + (unit.tower + "-" + unit.num)}
+    <Modal open={open} onClose={onClose} eyebrow="REQUEST" title={"Request " + kind.toLowerCase() + " · " + unitLabel(unit)}
       subtitle={"Goes to a manager for approval. " + code + " · " + (unit.typology || "")} width={600}
       footer={<>
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>

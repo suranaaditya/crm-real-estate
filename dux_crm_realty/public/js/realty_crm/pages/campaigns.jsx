@@ -98,6 +98,11 @@ window.PageCampaigns = function PageCampaigns() {
                   </tr>
                 );
               })}
+              {visible.length === 0 && (
+                <tr><td colSpan={9} style={{ padding: "40px 16px", textAlign: "center", color: "var(--neutral-400)", fontSize: 13 }}>
+                  {campaigns.length === 0 ? "No campaigns yet." : "No campaigns in this view."}
+                </td></tr>
+              )}
             </tbody>
           </table>
         </div>

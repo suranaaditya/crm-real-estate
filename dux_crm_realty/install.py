@@ -267,9 +267,15 @@ def create_doctypes():
 		f("typology", "Data", "Typology", in_list_view=1),
 		f("col_break_unit", "Column Break"),
 		f("carpet_area", "Float", "Carpet Area (sqft)"),
-		f("facing", "Select", "Facing", options="East\nWest\nNorth\nSouth"),
+		f("built_up_area", "Float", "Built-up Area (sqft)"),
+		# leading blank option: Frappe fills an empty Select with its FIRST option on insert,
+		# which silently turned every unit with no recorded facing into "East"
+		f("facing", "Select", "Facing", options="\nEast\nWest\nNorth\nSouth"),
 		f("price", "Currency", "Price", in_list_view=1),
 		f("status", "Select", "Status", options="Available\nBlocked\nReserved\nSold", in_list_view=1, default="Available"),
+		# free text from the client's own inventory sheet ("Front Furnished", "Back
+		# Customizable" …) — shown in the unit panel
+		f("remarks", "Small Text", "Remarks"),
 	], perms=_ledger_perms(manager_write=True))
 
 	# ---- lead ----
@@ -313,7 +319,9 @@ def create_doctypes():
 		title_field="lead_name", fields=[
 		f("visit_id", "Data", "Visit ID", reqd=1, unique=1, in_list_view=1),
 		f("lead", "Link", "Lead", options="Realty Lead", in_list_view=1),
-		f("lead_name", "Data", "Lead Name", fetch_from="lead.lead_name", read_only=1, in_list_view=1),
+		f("lead_name", "Data", "Lead Name", fetch_from="lead.lead_name", read_only=1, in_list_view=1,
+			# keep an explicitly given visitor name (imported visits); fetch only when blank
+			fetch_if_empty=1),
 		f("project", "Link", "Project", options="Realty Project"),
 		f("sales_owner", "Link", "Owner", options="Realty Sales Owner", in_list_view=1),
 		f("col_break_visit", "Column Break"),

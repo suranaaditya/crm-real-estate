@@ -3,7 +3,13 @@ import React from "react";
 
 window.PageDashboard = function PageDashboard({ onNav }) {
   const data = window.CRM_DATA;
-  // "today" comes from the bootstrap so the pin lives in exactly one place (see CLAUDE.md)
+  const bannerDate = (() => {
+    const d = new Date(data.today + "T00:00:00");
+    const DAYS = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
+    const MON = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    return `${DAYS[d.getDay()]} · ${String(d.getDate()).padStart(2, "0")} ${MON[d.getMonth()]} ${d.getFullYear()}`;
+  })();
+  // "today" comes from the bootstrap (the real date, site time zone) — see CLAUDE.md
   const visitsToday = data.visits.filter(v => v.date === data.today).length;
   const visitsWeek = data.visits.filter(v => {
     const d = new Date(v.date), t = new Date(data.today);
@@ -58,7 +64,7 @@ window.PageDashboard = function PageDashboard({ onNav }) {
         display: "grid", gridTemplateColumns: "1fr auto", gap: 24, alignItems: "center",
       }}>
         <div>
-          <div className="dux-eyebrow" style={{ color: "var(--dux-amber)", fontSize: 11, marginBottom: 8 }}>WEDNESDAY · 29 APR 2026</div>
+          <div className="dux-eyebrow" style={{ color: "var(--dux-amber)", fontSize: 11, marginBottom: 8 }}>{bannerDate}</div>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, lineHeight: 1.2 }}>{"Good " + (new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening") + ", " + String(_me().name).split(" ")[0] + "."}</div>
           <div style={{ fontSize: 14, color: "rgba(255,255,255,0.72)", marginTop: 6 }}>
             You have <strong style={{ color: "#fff" }}>{visitsToday} site visits</strong> today and <strong style={{ color: "var(--dux-amber)" }}>{overdueTasks} overdue follow-up{overdueTasks === 1 ? "" : "s"}</strong>.
@@ -81,7 +87,7 @@ window.PageDashboard = function PageDashboard({ onNav }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
         {/* Funnel */}
-        <Panel title="Sales funnel" subtitle="THIS QUARTER" action={<Btn variant="ghost" size="sm" onClick={() => onNav("reports")}>View report →</Btn>}>
+        <Panel title="Sales funnel" subtitle="ALL LEADS" action={<Btn variant="ghost" size="sm" onClick={() => onNav("reports")}>View report →</Btn>}>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {funnel.map(f => {
               const pct = (f.count / funnelMax) * 100;

@@ -29,7 +29,7 @@ window.PagePayments = function PagePayments() {
 
   const visible = tab === "dues" ? [...overdue, ...due, ...scheduled].slice(0, 40) : paid.slice(0, 40);
 
-  const today = new Date("2026-04-29");
+  const today = new Date(data.today);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -133,6 +133,11 @@ window.PagePayments = function PagePayments() {
                   </tr>
                 );
               })}
+              {visible.length === 0 && (
+                <tr><td colSpan={7} style={{ padding: "40px 16px", textAlign: "center", color: "var(--neutral-400)", fontSize: 13 }}>
+                  {tab === "dues" ? "No outstanding or upcoming payments." : "No payments received yet."}
+                </td></tr>
+              )}
             </tbody>
           </table>
         </div>
