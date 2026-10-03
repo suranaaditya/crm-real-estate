@@ -59,18 +59,12 @@ window.PagePayments = function PagePayments() {
           </button>
         ))}
         <div style={{ flex: 1 }} />
-        <Btn variant="outline" size="sm" icon="file">Export</Btn>
-        <Btn variant="primary" size="sm" icon="plus" style={{ marginLeft: 10 }} onClick={() => {
-          frappe.prompt(
-            { fieldname: "due_id", label: "Due ID (e.g. BK-2603-3)", fieldtype: "Data", reqd: 1 },
-            async (v) => {
-              try {
-                const r = await frappe.call({ method: "dux_crm_realty.api.crm.record_receipt", args: { due_id: v.due_id } });
-                frappe.show_alert({ message: "Receipt " + r.message.receipt_no + " recorded", indicator: "green" });
-                if (window.__refreshCRM) await window.__refreshCRM();
-              } catch (e) { frappe.msgprint(e.message || "Could not record receipt"); }
-            }, "Record receipt", "Record");
-        }}>Record receipt</Btn>
+        <Btn variant="outline" size="sm" icon="file" onClick={() => {
+          if (!dues.length) { frappe.show_alert({ message: "No payment dues to export yet", indicator: "orange" }); return; }
+          window.downloadCsv("payment-dues.csv",
+            ["Due", "Booking", "Customer", "Unit", "Milestone", "% of BSP", "Amount", "Due date", "Status", "Paid on", "Receipt"],
+            dues.map(d => [d.id, d.bookingId, d.leadName, d.unit, d.stageName, d.pct, d.amount, d.dueDate, d.status, d.paidAt, d.receiptNo]));
+        }}>Export</Btn>
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
@@ -122,13 +116,26 @@ window.PagePayments = function PagePayments() {
                       }}>{tone.label}</span>
                     </td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                      <Btn variant="ghost" size="sm" onClick={async () => {
-                        if (d.status === "paid") { frappe.show_alert("Receipt " + esc(d.receiptNo || "—") + " · " + esc(d.leadName)); return; }
-                        try {
-                          const r = await frappe.call({ method: "dux_crm_realty.api.crm.send_reminder", args: { due_id: d.id } });
-                          frappe.show_alert({ message: r.message.message, indicator: "blue" });
-                        } catch (e) { frappe.msgprint(e.message || "Could not send reminder"); }
-                      }}>{d.status === "paid" ? (d.receiptNo || "View receipt") : "Send reminder"}</Btn>
+                      {/* "Record receipt" is per row now (the old free-text prompt took a typed due
+                          id); the reminder is only LOGGED — no SMS gateway exists, so it no longer
+                          claims "Send" */}
+                      {d.status === "paid"
+                        ? <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--neutral-600)" }}>{d.receiptNo || "Receipted"}</span>
+                        : <div style={{ display: "inline-flex", gap: 6 }}>
+                            <Btn variant="outline" size="sm" onClick={() => frappe.confirm("Record a receipt for " + esc(fmtINR(d.amount)) + " from " + esc(d.leadName) + "?", async () => {
+                              try {
+                                const r = await frappe.call({ method: "dux_crm_realty.api.crm.record_receipt", args: { due_id: d.id } });
+                                frappe.show_alert({ message: r.message.unchanged ? esc(r.message.message) : "Receipt " + esc(r.message.receipt_no) + " recorded", indicator: r.message.unchanged ? "orange" : "green" });
+                                if (window.__refreshCRM) await window.__refreshCRM();
+                              } catch (e) { /* frappe.call already showed the server's message */ }
+                            })}>Record receipt</Btn>
+                            <Btn variant="ghost" size="sm" title="Logs a reminder on the due — SMS isn't connected, so nothing is sent" onClick={async () => {
+                              try {
+                                const r = await frappe.call({ method: "dux_crm_realty.api.crm.send_reminder", args: { due_id: d.id } });
+                                frappe.show_alert({ message: esc(r.message.message), indicator: "blue" });
+                              } catch (e) { /* frappe.call already showed the server's message */ }
+                            }}>Log reminder</Btn>
+                          </div>}
                     </td>
                   </tr>
                 );

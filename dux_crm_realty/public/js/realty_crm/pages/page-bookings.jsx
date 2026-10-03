@@ -4,7 +4,10 @@ import React from "react";
 window.PageBookings = function PageBookings() {
   const data = window.CRM_DATA;
   const [selected, setSelected] = React.useState(data.bookings[0]?.id);
+  const [q, setQ] = React.useState("");   // the search box used to be inert
   const booking = data.bookings.find(b => b.id === selected);
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? data.bookings.filter(b => [b.leadName, b.unit, b.id, b.project].some(v => String(v || "").toLowerCase().includes(needle))) : data.bookings;
 
   const stages = [
     { id: "token-received", label: "Token" },
@@ -30,10 +33,10 @@ window.PageBookings = function PageBookings() {
               {data.bookings.length}
             </span>
           </div>
-          <input placeholder="Search by name, unit, BK code…" style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--hairline)", borderRadius: 6, fontSize: 13, fontFamily: "var(--font-body)" }} />
+          <input placeholder="Search by name, unit, BK code…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: "100%", padding: "8px 12px", border: "1px solid var(--hairline)", borderRadius: 6, fontSize: 13, fontFamily: "var(--font-body)" }} />
         </div>
         <div style={{ flex: 1, overflowY: "auto" }}>
-          {data.bookings.map(b => {
+          {shown.map(b => {
             const active = b.id === selected;
             const tone = stageTone[b.stage] || stageTone["token-received"];
             return (
@@ -79,7 +82,7 @@ window.PageBookings = function PageBookings() {
           <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginTop: 6, flexWrap: "wrap" }}>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700 }}>{booking.leadName}</div>
             <div style={{ fontSize: 13, color: "var(--neutral-400)" }}>
-              {booking.project} · Unit {booking.unit} · {booking.typology} · {booking.carpet} sqft
+              {[booking.project, "Unit " + booking.unit, booking.typology, booking.carpet > 0 ? booking.carpet + " sqft" : null].filter(Boolean).join(" · ")}
             </div>
           </div>
 
@@ -118,8 +121,8 @@ window.PageBookings = function PageBookings() {
                 <tbody>
                   {[
                     { label: "Basic Sale Price (BSP)", v: booking.bsp },
-                    { label: "Carpet area", v: booking.carpet + " sqft" },
-                    { label: "Rate per sqft", v: "₹ " + Math.round(booking.bsp / booking.carpet).toLocaleString("en-IN") },
+                    { label: "Carpet area", v: booking.carpet > 0 ? booking.carpet + " sqft" : "—" },
+                    { label: "Rate per sqft", v: booking.bsp > 0 && booking.carpet > 0 ? "₹ " + Math.round(booking.bsp / booking.carpet).toLocaleString("en-IN") : "—" },
                     { label: "Other charges (PLC, parking, club)", v: booking.otherCharges },
                     { label: "GST @ 5%", v: booking.gst },
                     { label: "Token paid", v: booking.tokenAmount },
@@ -170,7 +173,6 @@ window.PageBookings = function PageBookings() {
 
               <Panel title="Documents" subtitle="STATUS">
                 {[
-                  { name: "Booking form",   done: true },
                   { name: "Token receipt",  done: booking.tokenPaid },
                   { name: "Agreement",      done: booking.agreementSigned },
                   { name: "Sale deed",      done: booking.stage === "registered" },

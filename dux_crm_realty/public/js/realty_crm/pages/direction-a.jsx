@@ -175,26 +175,30 @@ function ViewToggle({ view, setView }) {
 function TableView({ leads, totalCount, density, rowH, selected, setSelected, sort, setSort, onOpen, owners, refresh }) {
   const [reassignOpen, setReassignOpen] = React.useState(false);
   const [bulkOwner, setBulkOwner] = React.useState("");
+  const [bulkBusy, setBulkBusy] = React.useState(false);
+  // Act only on selected leads that are VISIBLE: a selection kept across a filter change
+  // used to reassign leads the manager could no longer see.
+  const visibleSelected = leads.filter(l => selected.has(l.id)).map(l => l.id);
+  const allVisibleSelected = leads.length > 0 && leads.every(l => selected.has(l.id));
   const [menuFor, setMenuFor] = React.useState(null); // lead id whose row menu is open
 
   const exportCsv = () => {
-    const cols = ["id", "name", "phone", "email", "stage", "score", "projectName", "interest", "budget", "source", "ownerName", "enteredBy", "lastActivity", "visitOn"];
-    const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
-    const rows = [cols.join(",")].concat(leads.map(l => cols.map(c => esc(l[c])).join(",")));
-    const blob = new Blob([rows.join("\n")], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = "leads.csv"; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    const cols = ["id", "name", "phone", "email", "stage", "score", "projectName", "interest", "budget", "source", "channelPartner", "referredBy", "ownerName", "enteredBy", "lastActivity", "visitOn"];
+    window.downloadCsv("leads.csv", cols, leads.map(l => cols.map(c => l[c])));
     frappe.show_alert({ message: leads.length + " leads exported", indicator: "green" });
   };
 
   const applyReassign = async () => {
+    if (bulkBusy || !bulkOwner || !visibleSelected.length) return;
+    const owner = bulkOwner === "__unassign" ? "" : bulkOwner;
+    setBulkBusy(true);
     try {
-      await frappe.call({ method: "dux_crm_realty.api.crm.bulk_reassign", args: { leads: JSON.stringify([...selected]), owner: bulkOwner } });
-      frappe.show_alert({ message: selected.size + " leads " + (bulkOwner ? "assigned to " + esc(bulkOwner) : "unassigned"), indicator: "green" });
+      await frappe.call({ method: "dux_crm_realty.api.crm.bulk_reassign", args: { leads: JSON.stringify(visibleSelected), owner } });
+      frappe.show_alert({ message: visibleSelected.length + " leads " + (owner ? "assigned to " + esc(owner) : "unassigned"), indicator: "green" });
       setReassignOpen(false); setSelected(new Set());
       if (refresh) await refresh();
-    } catch (e) { frappe.msgprint(e.message || "Could not reassign"); }
+    } catch (e) { /* frappe.call already showed the server's message */ }
+    finally { setBulkBusy(false); }
   };
 
   const rowAction = async (l, action) => {
@@ -221,10 +225,10 @@ function TableView({ leads, totalCount, density, rowH, selected, setSelected, so
         }}>
           <div style={{ flex: 1 }}>
             Showing <strong style={{ color: "var(--neutral-800)" }}>{leads.length}</strong> of {totalCount} leads
-            {selected.size > 0 && <> · <strong style={{ color: "var(--dux-amber-600)" }}>{selected.size} selected</strong></>}
+            {visibleSelected.length > 0 && <> · <strong style={{ color: "var(--dux-amber-600)" }}>{visibleSelected.length} selected</strong></>}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            {selected.size > 0 && <>
+            {visibleSelected.length > 0 && <>
               {/* bulk_reassign is manager-only server-side */}
               {window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.isManager &&
                 <Btn variant="soft" size="sm" icon="users" onClick={() => { setBulkOwner(""); setReassignOpen(true); }}>Reassign</Btn>}
@@ -237,8 +241,8 @@ function TableView({ leads, totalCount, density, rowH, selected, setSelected, so
           <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "var(--font-body)", fontSize: 13 }}>
             <thead style={{ position: "sticky", top: 0, background: "var(--bg)", zIndex: 1 }}>
               <tr style={{ borderBottom: "1px solid var(--hairline)" }}>
-                <Th w={36}><Checkbox checked={selected.size === leads.length && leads.length > 0}
-                   onChange={() => setSelected(selected.size === leads.length ? new Set() : new Set(leads.map(l => l.id)))} /></Th>
+                <Th w={36}><Checkbox checked={allVisibleSelected}
+                   onChange={() => setSelected(allVisibleSelected ? new Set() : new Set(leads.map(l => l.id)))} /></Th>
                 <Th>Lead</Th>
                 <Th>Project / Interest</Th>
                 <Th>Stage</Th>
@@ -284,7 +288,7 @@ function TableView({ leads, totalCount, density, rowH, selected, setSelected, so
                   <Td><ScoreChip score={l.score} /></Td>
                   <Td>
                     <div style={{ fontSize: 12 }}>{l.source}</div>
-                    {l.channelPartnerName && <div style={{ fontSize: 10, color: "var(--neutral-400)" }}>{l.channelPartnerName}</div>}
+                    {(l.referredBy || l.channelPartnerName) && <div style={{ fontSize: 10, color: "var(--neutral-400)" }}>{l.referredBy ? "by " + l.referredBy : l.channelPartnerName}</div>}
                   </Td>
                   <Td>
                     {l.ownerName ? (
@@ -325,15 +329,17 @@ function TableView({ leads, totalCount, density, rowH, selected, setSelected, so
       </div>
 
       {window.Modal && <Modal open={reassignOpen} onClose={() => setReassignOpen(false)}
-        eyebrow="BULK ASSIGN" title={"Assign " + selected.size + " lead" + (selected.size === 1 ? "" : "s")}
+        eyebrow="BULK ASSIGN" title={"Assign " + visibleSelected.length + " lead" + (visibleSelected.length === 1 ? "" : "s")}
         subtitle="Assign the selected leads to a sales owner." width={520}
         footer={<>
-          <Btn variant="ghost" size="sm" onClick={() => setReassignOpen(false)}>Cancel</Btn>
-          <Btn variant="accent" size="sm" icon="users" onClick={applyReassign}>Assign</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => setReassignOpen(false)} disabled={bulkBusy}>Cancel</Btn>
+          <Btn variant="accent" size="sm" icon="users" onClick={applyReassign} disabled={bulkBusy || !bulkOwner}>{bulkBusy ? "Assigning…" : "Assign"}</Btn>
         </>}>
+        {/* defaulting to "Unassigned" made one click strip the owner off every selected lead */}
         <Field label="Assign to">
           <Select value={bulkOwner} onChange={(e) => setBulkOwner(e.target.value)}>
-            <option value="">Unassigned</option>
+            <option value="" disabled>Choose a sales owner…</option>
+            <option value="__unassign">Unassigned (remove owner)</option>
             {(owners || []).map(o => <option key={o.id} value={o.name}>{o.name} · {o.role}</option>)}
           </Select>
         </Field>

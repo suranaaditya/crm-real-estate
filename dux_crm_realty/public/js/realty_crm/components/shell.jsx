@@ -46,6 +46,21 @@ window.todayISO = () => {
   const d = new Date(), p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
+// One CSV writer for every export. Excel runs a cell that starts with = + - @ as a formula
+// (a lead named "=HYPERLINK(…)" would execute) and reads "+91…" as a sum, so such cells get
+// a leading apostrophe; the BOM makes Excel read UTF-8 (₹, accented names).
+window.downloadCsv = (filename, header, rows) => {
+  const cell = (v) => {
+    let s = String(v == null ? "" : v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return '"' + s.replace(/"/g, '""') + '"';
+  };
+  const lines = [header.map(cell).join(",")].concat(rows.map(r => r.map(cell).join(",")));
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 window.fmtRelative = (iso) => {
   if (!iso) return "—";
   // compare calendar days only: a datetime ("2026-09-28 14:22:05") and a date both reduce to
@@ -324,7 +339,17 @@ window.Topbar = function Topbar({ title, subtitle, children, accent, search, onS
           )}
         </div>
       )}
-      <button title="Notifications" style={iconBtn}><Icon name="bell" size={18} /><span style={notifDot} /></button>
+      {/* the bell showed a permanent unread dot and did nothing. It now leads a manager to the
+          Approvals inbox, with the dot only when something is waiting. */}
+      {(() => {
+        const d = window.CRM_DATA || {}; const cu = d.currentUser || {};
+        if (!cu.isManager) return null;
+        const pending = (d.pendingHolds || []).length + (d.pendingShares || []).length;
+        return <button title={pending ? pending + " request(s) waiting for approval" : "No pending approvals"} style={iconBtn}
+          onClick={() => { location.hash = "approvals"; }}>
+          <Icon name="bell" size={18} />{pending > 0 && <span style={notifDot} />}
+        </button>;
+      })()}
       {children}
     </header>
   );
@@ -343,7 +368,7 @@ const notifDot = {
 window.iconBtn = iconBtn;
 
 // ---------- Buttons ----------
-window.Btn = function Btn({ variant = "primary", icon, children, size = "md", onClick, style }) {
+window.Btn = function Btn({ variant = "primary", icon, children, size = "md", onClick, style, disabled = false, title }) {
   const sizes = {
     sm: { padding: "7px 14px", fontSize: 12 },
     md: { padding: "10px 18px", fontSize: 13 },
@@ -357,12 +382,13 @@ window.Btn = function Btn({ variant = "primary", icon, children, size = "md", on
     soft:    { background: "var(--neutral-50)", color: "var(--neutral-800)", border: "1.5px solid var(--hairline)" },
   };
   return (
-    <button onClick={onClick} style={{
+    <button onClick={disabled ? undefined : onClick} disabled={disabled} title={title} style={{
       display: "inline-flex", alignItems: "center", gap: 8,
       borderRadius: 999, fontFamily: "var(--font-display)", fontWeight: 600,
       letterSpacing: "0.04em", textTransform: "uppercase",
-      cursor: "pointer", transition: "all 250ms var(--ease-standard)",
+      cursor: disabled ? "not-allowed" : "pointer", transition: "all 250ms var(--ease-standard)",
       ...sizes[size], ...variants[variant], ...style,
+      ...(disabled ? { opacity: 0.55 } : {}),
     }}>
       {icon && <Icon name={icon} size={size === "sm" ? 13 : 15} />}
       {children}

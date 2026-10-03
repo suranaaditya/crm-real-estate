@@ -46,7 +46,7 @@ window.PageCampaigns = function PageCampaigns() {
         <FilterChip active={filter === "scheduled"} onClick={() => setFilter("scheduled")} count={counts.scheduled}>Scheduled</FilterChip>
         <FilterChip active={filter === "ended"} onClick={() => setFilter("ended")} count={counts.ended}>Ended</FilterChip>
         <div style={{ flex: 1 }} />
-        <Btn variant="accent" icon="plus" size="sm">New campaign</Btn>
+        <Btn variant="accent" icon="plus" size="sm" disabled title="Creating campaigns isn't built yet">New campaign</Btn>
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>

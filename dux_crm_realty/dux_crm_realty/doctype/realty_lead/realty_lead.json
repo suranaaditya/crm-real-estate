@@ -26,6 +26,8 @@
   "col_break_lead2",
   "source",
   "channel_partner",
+  "referred_by",
+  "referred_by_phone",
   "sales_owner",
   "sec_break_dates",
   "lead_created",
@@ -145,6 +147,16 @@
    "fieldtype": "Link",
    "label": "Channel Partner",
    "options": "Realty Channel Partner"
+  },
+  {
+   "fieldname": "referred_by",
+   "fieldtype": "Data",
+   "label": "Referred By"
+  },
+  {
+   "fieldname": "referred_by_phone",
+   "fieldtype": "Data",
+   "label": "Referrer Phone"
   },
   {
    "fieldname": "sales_owner",

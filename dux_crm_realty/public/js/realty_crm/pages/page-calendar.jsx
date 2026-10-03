@@ -43,10 +43,30 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
   });
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 6);
   const weekLabel = `${MON[weekStart.getMonth()]} ${weekStart.getDate()} – ${MON[weekEnd.getMonth()]} ${weekEnd.getDate()}, ${weekEnd.getFullYear()}`;
-  const shiftWeek = (n) => setWeekStart(prev => { const d = new Date(prev); d.setDate(d.getDate() + n * 7); return d; });
+  // In Day view the arrows step a day (they used to move only the week label)
+  const shift = (n) => {
+    if (view === "day") {
+      const d = new Date(selectedDate + "T00:00:00"); d.setDate(d.getDate() + n);
+      const iso = fmtISO(d); setSelectedDate(iso); setWeekStart(mondayOf(iso));
+    } else {
+      setWeekStart(prev => { const d = new Date(prev); d.setDate(d.getDate() + n * 7); return d; });
+    }
+  };
+  const jumpTo = (iso) => { if (!iso) return; setWeekStart(mondayOf(iso)); setSelectedDate(iso); };
+  const changeView = (v) => {
+    // switching to Day after browsing weeks used to jump back to today's date
+    if (v === "day" && !weekDays.some(d => d.date === selectedDate)) setSelectedDate(weekDays[0].date);
+    setView(v);
+  };
 
   const refresh = async () => { if (window.__refreshCRM) await window.__refreshCRM(); };
-  const toggleTask = async (id) => { try { await frappe.call({ method: "dux_crm_realty.api.crm.set_task_status", args: { task: id } }); await refresh(); } catch (e) { frappe.msgprint(e.message || "Could not update task"); } };
+  // same gate as set_task_status; send the INTENDED state (a blind toggle from a stale
+  // screen reopened finished tasks)
+  const canToggle = (t) => !!(data.currentUser && data.currentUser.isManager) || !t.assignedTo || t.assignedTo === meName;
+  const toggleTask = async (id, done) => {
+    try { await frappe.call({ method: "dux_crm_realty.api.crm.set_task_status", args: { task: id, done: done ? 0 : 1 } }); await refresh(); }
+    catch (e) { /* frappe.call already showed the server's message */ }
+  };
 
   const items = React.useMemo(() => {
     const out = [];
@@ -91,23 +111,35 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
   const openTasks = items.filter(it => it.kind === "task" && !it.done);
   const overdue = items.filter(it => it.kind === "task" && !it.done && it.date < TODAY);
   const todayCount = items.filter(it => it.date === TODAY).length;
-  const visitsCount = items.filter(it => it.kind === "visit").length;
+  // the card used to count every visit ever (127) over an empty week
+  const weekISO = new Set(weekDays.map(d => d.date));
+  const visitsCount = items.filter(it => it.kind === "visit" && weekISO.has(it.date)).length;
+  const latestVisit = items.filter(it => it.kind === "visit" && it.date).reduce((m, it) => (it.date > m ? it.date : m), "");
 
+  // A click opens the linked lead. It used to mark a TASK done on the spot — with no
+  // confirm, and a rep clicking a colleague's task got a 403.
   const onItemClick = (it) => {
-    if (it.kind === "task") return toggleTask(it.id);
-    if (it.kind === "visit" && it.leadId) { const l = findLead(it.leadId); if (l) setOpenLead(l); }
+    if (it.leadId) { const l = findLead(it.leadId); if (l) setOpenLead(l); }
   };
 
   const ItemCard = ({ it, compact }) => {
     const tone = toneFor(it);
-    const clickable = it.kind === "task" || (it.kind === "visit" && it.leadId);
+    const clickable = !!it.leadId;
+    const tickable = it.kind === "task" && canToggle(it.raw);
     return (
-      <div onClick={() => onItemClick(it)} title={it.kind === "task" ? "Click to mark done/undone" : (it.leadId ? "Open lead" : "")}
+      <div onClick={() => onItemClick(it)} title={it.leadId ? "Open lead" : ""}
         style={{ background: tone.bg, borderLeft: `3px solid ${tone.fg}`, borderRadius: compact ? 4 : 8, padding: compact ? "4px 6px" : "10px 12px", cursor: clickable ? "pointer" : "default", marginBottom: compact ? 2 : 0, opacity: it.done ? 0.55 : 1 }}>
         <div style={{ display: "flex", alignItems: "center", gap: compact ? 4 : 8 }}>
           {!compact && <Icon name={CAL_ICON[it.type] || "note"} size={14} style={{ color: tone.fg }} />}
           <span style={{ fontFamily: "var(--font-mono)", fontSize: compact ? 9 : 11, color: tone.fg, fontWeight: 700 }}>{it.time || "—"}</span>
-          {it.kind === "task" && it.done && <Icon name="check" size={compact ? 9 : 12} style={{ color: "var(--success)" }} />}
+          {it.kind === "task" && (tickable
+            ? <button onClick={(e) => { e.stopPropagation(); toggleTask(it.id, it.done); }} title={it.done ? "Mark as open" : "Mark as done"}
+                style={{ marginLeft: "auto", width: compact ? 14 : 18, height: compact ? 14 : 18, borderRadius: 4, cursor: "pointer", padding: 0,
+                  border: "1.5px solid " + (it.done ? "var(--success)" : tone.fg), background: it.done ? "var(--success)" : "transparent",
+                  color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                {it.done && <Icon name="check" size={compact ? 9 : 11} />}
+              </button>
+            : (it.done && <Icon name="check" size={compact ? 9 : 12} style={{ color: "var(--success)", marginLeft: "auto" }} />))}
         </div>
         <div style={{ fontSize: compact ? 11 : 13, fontWeight: 600, color: "var(--neutral-800)", textDecoration: it.done ? "line-through" : "none", lineHeight: 1.25, marginTop: compact ? 0 : 2 }}>{it.title}</div>
         {!compact && <div style={{ fontSize: 11, color: "var(--neutral-500)", marginTop: 2 }}>{it.sub}</div>}
@@ -119,11 +151,14 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
       <div style={{ padding: "16px 24px", display: "flex", alignItems: "center", gap: 14, borderBottom: "1px solid var(--hairline)", background: "var(--bg)", flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Btn variant="ghost" size="sm" onClick={() => shiftWeek(-1)}>‹</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => shift(-1)}>‹</Btn>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700, minWidth: 200, textAlign: "center" }}>{weekLabel}</div>
-          <Btn variant="ghost" size="sm" onClick={() => shiftWeek(1)}>›</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => shift(1)}>›</Btn>
         </div>
-        <Btn variant="outline" size="sm" onClick={() => { setWeekStart(mondayOf(TODAY)); setSelectedDate(TODAY); }}>Today</Btn>
+        <Btn variant="outline" size="sm" onClick={() => jumpTo(TODAY)}>Today</Btn>
+        {/* past visits sit up to 37 weeks back — reaching them one week at a time was impractical */}
+        <input type="date" value={selectedDate} onChange={(e) => jumpTo(e.target.value)} title="Go to date"
+          style={{ padding: "7px 10px", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 13, fontFamily: "var(--font-body)" }} />
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11, fontWeight: 700, color: "var(--neutral-400)", fontFamily: "var(--font-display)", letterSpacing: "0.06em", textTransform: "uppercase" }}>Calendar of</span>
         <select value={owner} onChange={(e) => setOwner(e.target.value)} style={{ padding: "8px 12px", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 13, fontFamily: "var(--font-body)" }}>
@@ -134,7 +169,7 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
           <option value="all">All projects</option>
           {(data.projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        <SegmentedControl value={view} onChange={setView} options={[{ value: "week", label: "Week" }, { value: "day", label: "Day" }]} />
+        <SegmentedControl value={view} onChange={changeView} options={[{ value: "week", label: "Week" }, { value: "day", label: "Day" }]} />
         <Btn variant="accent" size="sm" icon="plus" onClick={() => setTaskOpen(true)}>New task</Btn>
       </div>
 
@@ -155,8 +190,14 @@ window.PageCalendar = function PageCalendar({ initialKind = "all", teamView = fa
           <StatCard label="DUE TODAY" value={todayCount} icon="calendar" />
           <StatCard label="OPEN TASKS" value={openTasks.length} icon="check" />
           <StatCard label="OVERDUE" value={overdue.length} deltaTone="down" delta={overdue.length ? "needs attention" : "all clear"} icon="x" />
-          <StatCard label="VISITS" value={visitsCount} icon="building" />
+          <StatCard label="VISITS THIS WEEK" value={visitsCount} icon="building" />
         </div>
+        {kind !== "tasks" && visitsCount === 0 && latestVisit && !weekISO.has(latestVisit) && (
+          <div style={{ marginBottom: 14, fontSize: 13, color: "var(--neutral-600)" }}>
+            No visits this week. <a onClick={() => jumpTo(latestVisit)} style={{ cursor: "pointer", fontWeight: 600, color: "var(--dux-navy)" }}>
+              Jump to the latest visit ({fmtDate(latestVisit)}) →</a>
+          </div>
+        )}
 
         {view === "week" && (
           <div style={{ display: "grid", gridTemplateColumns: "60px repeat(7, 1fr)", background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, overflow: "hidden" }}>

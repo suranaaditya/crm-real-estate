@@ -19,6 +19,9 @@
   "facing",
   "price",
   "status",
+  "sold_to_lead",
+  "sold_to_contact",
+  "sold_on",
   "remarks"
  ],
  "fields": [
@@ -94,6 +97,22 @@
    "in_list_view": 1,
    "label": "Status",
    "options": "Available\nBlocked\nReserved\nSold"
+  },
+  {
+   "fieldname": "sold_to_lead",
+   "fieldtype": "Link",
+   "label": "Sold To (Lead)",
+   "options": "Realty Lead"
+  },
+  {
+   "fieldname": "sold_to_contact",
+   "fieldtype": "Data",
+   "label": "Sold To (Name)"
+  },
+  {
+   "fieldname": "sold_on",
+   "fieldtype": "Date",
+   "label": "Sold On"
   },
   {
    "fieldname": "remarks",

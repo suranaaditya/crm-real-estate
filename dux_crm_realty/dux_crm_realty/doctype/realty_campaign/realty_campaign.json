@@ -51,7 +51,8 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "active\nended\nscheduled"
+   "options": "scheduled\nactive\nended",
+   "default": "scheduled"
   },
   {
    "fieldname": "col_break_camp",

@@ -14,16 +14,20 @@ const drawerLbl = {
   letterSpacing: "0.06em", fontSize: 10, color: "var(--neutral-400)",
 };
 
-window.LeadDetail = function LeadDetail({ lead, onClose }) {
+window.LeadDetail = function LeadDetail({ lead: leadProp, onClose }) {
   const [tab, setTab] = ldUseState("activity");
-  const [stage, setStage] = ldUseState(lead ? lead.stage : null);
-  const [owner, setOwner] = ldUseState(lead ? (lead.ownerName || "") : "");
-  const [activities, setActivities] = ldUseState(lead ? (lead.activities || []) : []);
+  const [stage, setStage] = ldUseState(leadProp ? leadProp.stage : null);
+  const [owner, setOwner] = ldUseState(leadProp ? (leadProp.ownerName || "") : "");
+  const [activities, setActivities] = ldUseState(leadProp ? (leadProp.activities || []) : []);
   const [actModal, setActModal] = ldUseState(null);   // {type, label} | null
   const [visitOpen, setVisitOpen] = ldUseState(false);
   const [emailOpen, setEmailOpen] = ldUseState(false);
-  if (!lead) return null;
+  const [editOpen, setEditOpen] = ldUseState(false);
+  if (!leadProp) return null;
   const data = window.CRM_DATA;
+  // The opener hands over a snapshot; re-resolve from the live bootstrap so an edit (or any
+  // refresh) shows up without closing the drawer.
+  const lead = (data.leads || []).find(l => l.id === leadProp.id) || leadProp;
   const project = data.projects.find(p => p.id === lead.project);
 
   const refreshList = () => { if (window.__refreshCRM) window.__refreshCRM(); };
@@ -76,8 +80,8 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <Icon name="phone" size={13} /> {lead.phone}
                 </span>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <Icon name="mail" size={13} /> {lead.email}
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: lead.email ? undefined : "var(--neutral-400)" }}>
+                  <Icon name="mail" size={13} /> {lead.email || "No email"}
                 </span>
                 <span style={{ color: "var(--neutral-400)" }}>{lead.id}</span>
               </div>
@@ -93,6 +97,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
             <Btn variant="outline" size="sm" icon="whatsapp" onClick={() => setActModal({ type: "whatsapp", label: "Log a WhatsApp message" })}>WhatsApp</Btn>
             <Btn variant="outline" size="sm" icon="mail" onClick={() => setEmailOpen(true)}>Email</Btn>
             <Btn variant="outline" size="sm" icon="calendar" onClick={() => setVisitOpen(true)}>Schedule visit</Btn>
+            <Btn variant="ghost" size="sm" icon="edit" onClick={() => setEditOpen(true)}>Edit details</Btn>
           </div>
 
           {/* Manager controls: change status + assign owner */}
@@ -120,7 +125,10 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
         <div style={{ padding: "16px 24px", display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, borderBottom: "1px solid var(--hairline)" }}>
           <Fact label="Project"   value={project?.name} sub={project?.locality} />
           <Fact label="Interest"  value={lead.interest} sub={lead.budget > 0 ? "Budget " + fmtINR(lead.budget) : "Budget not given"} />
-          <Fact label="Source"    value={lead.source}   sub={lead.channelPartnerName || "Direct"} />
+          <Fact label="Source"    value={lead.source || "—"} sub={
+            lead.source === "Channel Partner" ? (lead.channelPartnerName || "Partner not recorded")
+            : lead.source === "Reference" ? (lead.referredBy ? "Referred by " + lead.referredBy : "Referrer not recorded")
+            : (lead.channelPartnerName || null)} />
           <Fact label="Entered by" value={lead.enteredBy || "—"} sub={owner ? ("Owner: " + owner) : "Unassigned"} />
         </div>
 
@@ -161,6 +169,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
 
     <LogActivityModal modal={actModal} onClose={() => setActModal(null)} lead={lead} onLogged={onLogged} />
     <ScheduleVisitModal open={visitOpen} onClose={() => setVisitOpen(false)} lead={lead} onLogged={onLogged} />
+    <EditLeadModal open={editOpen} onClose={() => setEditOpen(false)} lead={lead} onSaved={onLogged} />
     <EmailComposerModal open={emailOpen} onClose={() => setEmailOpen(false)} lead={lead} onLogged={onLogged} />
    </>
   );
@@ -170,7 +179,7 @@ window.LeadDetail = function LeadDetail({ lead, onClose }) {
 function LeadModal({ open, onClose, eyebrow, title, subtitle, width = 560, children, footer }) {
   if (!open) return null;
   return (
-    <div onClick={onClose} style={{
+    <div {...backdropClose(onClose)} style={{
       position: "fixed", inset: 0, background: "rgba(15,26,46,0.45)",
       display: "flex", alignItems: "center", justifyContent: "center",
       zIndex: 1000, backdropFilter: "blur(4px)", animation: "duxFade 160ms var(--ease-standard)",
@@ -213,19 +222,123 @@ function LogActivityModal({ modal, onClose, lead, onLogged }) {
       onLogged(r.message || r);
       frappe.show_alert({ message: modal.label + " logged", indicator: "green" });
       onClose();
-    } catch (e) { frappe.msgprint(e.message || "Could not log activity"); setBusy(false); }
+    } catch (e) { setBusy(false); /* frappe.call already showed the server's message */ }
+  };
+  const requestClose = () => {
+    if (busy) return;
+    if (text.trim() && !window.confirm("Discard what you've typed?")) return;
+    onClose();
   };
   return (
-    <LeadModal open={!!modal} onClose={onClose} eyebrow={meta.eyebrow} title={modal.label}
+    <LeadModal open={!!modal} onClose={requestClose} eyebrow={meta.eyebrow} title={modal.label}
       subtitle={lead.name + " · " + lead.id} width={560}
       footer={<>
-        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon={meta.icon} onClick={submit}>{busy ? "Saving…" : "Log"}</Btn>
+        <Btn variant="ghost" size="sm" onClick={requestClose} disabled={busy}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon={meta.icon} onClick={submit} disabled={busy}>{busy ? "Saving…" : "Log"}</Btn>
       </>}>
       <Field label={modal.label}>
         <Textarea autoFocus placeholder={meta.placeholder} rows={5} value={text}
           onChange={(e) => setText(e.target.value)} />
       </Field>
+    </LeadModal>
+  );
+}
+
+// ---------- Edit lead details ----------
+// Capture promises "you can complete the rest later", but there was no way to: a missing
+// partner or a wrong referrer was permanent. Same fields + rules as the New Lead form.
+const leadToForm = (l) => ({
+  name: l.name || "", phone: l.phone || "", email: l.email || "", occupation: l.occupation || "",
+  city: l.city || "", source: l.source || "", channelPartner: l.channelPartner || "",
+  referredBy: l.referredBy || "", referredByPhone: l.referredByPhone || "",
+  project: l.project || "", interest: l.interest || "", budget: l.budget ? String(l.budget) : "",
+});
+
+function EditLeadModal({ open, onClose, lead, onSaved }) {
+  const data = window.CRM_DATA;
+  const [form, setForm] = ldUseState(() => leadToForm(lead));
+  const [errors, setErrors] = ldUseState({});
+  const [dupeOk, setDupeOk] = ldUseState(false);
+  const [busy, setBusy] = ldUseState(false);
+  React.useEffect(() => {
+    if (open) { setForm(leadToForm(lead)); setErrors({}); setDupeOk(false); setBusy(false); }
+  }, [open]);
+  const patch = (o) => setForm(f => ({ ...f, ...o }));
+  const phoneChanged = phoneKey(form.phone) !== phoneKey(lead.phone);
+  const dupes = phoneChanged ? leadsWithPhone(form.phone, lead.id) : [];
+  // old imported leads can lack a partner/referrer: only insist when the source block changes
+  const before = leadToForm(lead);
+  const sourceTouched = ["source", "channelPartner", "referredBy", "referredByPhone"].some(k => form[k] !== before[k]);
+
+  const save = async () => {
+    if (busy) return;
+    const e = validateLeadContact(form, { dupes, dupeOk });
+    if (!sourceTouched) { delete e.source; delete e.channelPartner; delete e.referredBy; delete e.referredByPhone; }
+    if (form.budget !== before.budget) { const be = budgetError(form.budget); if (be) e.budget = be; }
+    setErrors(e);
+    if (Object.keys(e).length) return;
+    const payload = {};
+    Object.keys(form).forEach(k => { if (form[k] !== before[k]) payload[k] = form[k]; });
+    if (!Object.keys(payload).length) { onClose(); return; }
+    if (dupes.length && dupeOk) payload.allowDuplicate = 1;
+    setBusy(true);
+    try {
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.update_lead", args: { lead: lead.id, payload } });
+      frappe.show_alert({ message: r.message.changed.length ? "Lead updated" : "Nothing changed", indicator: "green" });
+      onClose();
+      onSaved && onSaved(r.message.activities);
+    } catch (err) {
+      // frappe.call already showed the server's message; if it was a duplicate phone added
+      // since this page loaded, reload so the warning and its checkbox appear
+      try { if (window.__refreshCRM) await window.__refreshCRM(); } catch (_e) {}
+    }
+    finally { setBusy(false); }
+  };
+  const requestClose = () => {
+    if (busy) return;
+    const dirty = Object.keys(form).some(k => form[k] !== before[k]);
+    if (dirty && !window.confirm("Discard your changes to this lead?")) return;
+    onClose();
+  };
+
+  return (
+    <LeadModal open={open} onClose={requestClose} eyebrow="EDIT LEAD" title={"Edit " + lead.name} width={720}
+      footer={<>
+        <Btn variant="ghost" size="sm" onClick={requestClose} disabled={busy}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save changes"}</Btn>
+      </>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Field label="Full name" required error={errors.name} span={2}>
+          <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} />
+        </Field>
+        <Field label="Phone" required error={errors.phone}>
+          <Input value={form.phone} onChange={(e) => { patch({ phone: e.target.value }); setDupeOk(false); }} />
+        </Field>
+        <Field label="Email" error={errors.email}>
+          <Input type="email" value={form.email} onChange={(e) => patch({ email: e.target.value })} />
+        </Field>
+        <DuplicatePhoneWarning dupes={dupes} ok={dupeOk} onOk={setDupeOk} error={!!errors.dupe} />
+        <LeadSourceFields form={form} patch={patch} errors={errors} />
+        <Field label="Occupation">
+          <Input value={form.occupation} onChange={(e) => patch({ occupation: e.target.value })} />
+        </Field>
+        <Field label="City">
+          <Input value={form.city} onChange={(e) => patch({ city: e.target.value })} />
+        </Field>
+        <Field label="Project of interest">
+          <Select value={form.project} onChange={(e) => patch({ project: e.target.value })}>
+            <option value="">— Not decided yet —</option>
+            {data.projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Configuration">
+          <Input value={form.interest} onChange={(e) => patch({ interest: e.target.value })} placeholder="e.g. 2 BHK, Office Suite" />
+        </Field>
+        <Field label="Budget (₹)" error={errors.budget}
+          hint={parseBudget(form.budget) > 0 ? "= " + fmtINR(parseBudget(form.budget)) : "e.g. 7500000, 75 L or 1.3 Cr"}>
+          <Input value={form.budget} onChange={(e) => { patch({ budget: e.target.value }); setErrors(er => ({ ...er, budget: undefined })); }} placeholder="e.g. 75 L" />
+        </Field>
+      </div>
     </LeadModal>
   );
 }
@@ -246,20 +359,26 @@ function ScheduleVisitModal({ open, onClose, lead, onLogged }) {
   const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const submit = async () => {
     if (busy) return;
+    if (!form.date) { frappe.msgprint("Pick a visit date."); return; }   // blank used to save as "today"
     setBusy(true);
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.schedule_visit", args: { payload: { date: form.date, time: form.time, partyOf: form.partyOf, notes: form.notes, lead: lead.id } } });
       if (r.message && r.message.activities) onLogged(r.message.activities);
-      frappe.show_alert({ message: "Visit " + r.message.visit_id + " scheduled", indicator: "green" });
+      frappe.show_alert({ message: "Visit " + esc(r.message.visit_id) + " scheduled for " + esc(form.date), indicator: "green" });
       onClose();
-    } catch (e) { frappe.msgprint(e.message || "Could not schedule visit"); setBusy(false); }
+      if (window.__refreshCRM) window.__refreshCRM();
+    } catch (e) { setBusy(false); /* frappe.call already showed the server's message */ }
   };
+  // whose calendar the visit lands on (an unassigned lead's visit goes to the rep booking it)
+  const cu = (window.CRM_DATA || {}).currentUser || {};
+  const meIsRep = ((window.CRM_DATA || {}).owners || []).some(o => o.name === cu.name);
+  const visitOwner = lead.ownerName || (meIsRep ? cu.name : null);
   return (
-    <LeadModal open={open} onClose={onClose} eyebrow="SCHEDULE A SITE VISIT" title="Schedule a site visit"
-      subtitle={lead.name + " · " + (lead.projectName || "")} width={600}
+    <LeadModal open={open} onClose={() => !busy && onClose()} eyebrow="SCHEDULE A SITE VISIT" title="Schedule a site visit"
+      subtitle={[lead.name, lead.projectName, visitOwner ? "on " + visitOwner + "'s calendar" : "Unassigned — shows on the team calendar"].filter(Boolean).join(" · ")} width={600}
       footer={<>
-        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="calendar" onClick={submit}>{busy ? "Scheduling…" : "Schedule visit"}</Btn>
+        <Btn variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="calendar" onClick={submit} disabled={busy}>{busy ? "Scheduling…" : "Schedule visit"}</Btn>
       </>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Field label="Visit date" required>
@@ -294,9 +413,11 @@ function EmailComposerModal({ open, onClose, lead, onLogged }) {
   const [body, setBody] = ldUseState("");
   const [attach, setAttach] = ldUseState([]);          // document_ids
   const [busy, setBusy] = ldUseState("");              // "draft" | "improve" | "send" | ""
+  const reqRef = React.useRef(0);   // bumps on open/close: a slow AI reply for an old session is dropped
   React.useEffect(() => {
     if (open) {
       setTo(lead.email || ""); setAccount((def && def.id) || (accounts[0] && accounts[0].id) || "");
+      reqRef.current++;
       setKind(kinds[0] || "Greeting"); setInstruction(""); setSubject(""); setBody(""); setAttach([]); setBusy("");
     }
   }, [open]);
@@ -311,21 +432,25 @@ function EmailComposerModal({ open, onClose, lead, onLogged }) {
   const noAccount = accounts.length === 0;
 
   const draft = async () => {
+    const my = ++reqRef.current;
     setBusy("draft");
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.draft_email", args: { lead: lead.id, instruction, kind } });
+      if (my !== reqRef.current) return;
       setSubject(r.message.subject || ""); setBody(r.message.body || "");
-    } catch (e) { frappe.msgprint(e.message || "Could not draft the email"); }
-    setBusy("");
+    } catch (e) { /* frappe.call already showed the server's message */ }
+    if (my === reqRef.current) setBusy("");
   };
   const improve = async () => {
     if (!body.trim()) return;
+    const my = ++reqRef.current;
     setBusy("improve");
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.improve_text", args: { text: body } });
+      if (my !== reqRef.current) return;
       setBody(r.message.text || body);
-    } catch (e) { frappe.msgprint(e.message || "Could not improve the text"); }
-    setBusy("");
+    } catch (e) { /* frappe.call already showed the server's message */ }
+    if (my === reqRef.current) setBusy("");
   };
   const send = async () => {
     if (!to.trim()) { frappe.msgprint("Enter a recipient email address."); return; }
@@ -340,11 +465,20 @@ function EmailComposerModal({ open, onClose, lead, onLogged }) {
     } catch (e) { frappe.msgprint(e.message || "Could not send the email"); setBusy(""); }
   };
 
+  // only a SEND in flight blocks closing — an AI draft takes up to ~25 s and used to trap the rep
+  const requestClose = () => {
+    if (busy === "send") return;
+    const dirty = !!(subject.trim() || body.trim() || instruction.trim() || attach.length);
+    if (dirty && !window.confirm("Discard this email draft?")) return;
+    reqRef.current++;
+    setBusy("");
+    onClose();
+  };
   return (
-    <LeadModal open={open} onClose={onClose} eyebrow="EMAIL · AI DRAFT" title={"Email " + lead.name}
+    <LeadModal open={open} onClose={requestClose} eyebrow="EMAIL · AI DRAFT" title={"Email " + lead.name}
       subtitle={lead.id + (lead.projectName ? " · " + lead.projectName : "")} width={680}
       footer={<>
-        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn variant="ghost" size="sm" onClick={requestClose}>Cancel</Btn>
         <Btn variant="accent" size="sm" icon="mail" onClick={send}
           style={{ opacity: (busy || noAccount) ? 0.6 : 1, pointerEvents: busy ? "none" : "auto" }}>
           {busy === "send" ? "Sending…" : "Send email"}
@@ -482,9 +616,21 @@ function ActivityTab({ lead, activities, setActivities }) {
 function TasksTab({ lead }) {
   const [items, setItems] = ldUseState(lead.tasks || []);
   const [modalOpen, setModalOpen] = ldUseState(false);
-  const toggle = (t) => {
-    setItems(items.map(x => x.id === t.id ? { ...x, done: !x.done } : x));
-    frappe.call({ method: "dux_crm_realty.api.crm.set_task_status", args: { task: t.id } }).catch(() => {});
+  // Same gate as set_task_status: the assignee, an unassigned task, or a manager. Send the
+  // INTENDED state (a blind "toggle" from a stale tab reopened finished tasks), roll back if
+  // the server refuses, and refresh so My Day and this tab agree.
+  const cu = (window.CRM_DATA || {}).currentUser || {};
+  const canToggle = (t) => !!cu.isManager || !t.assignedTo || t.assignedTo === cu.name;
+  const toggle = async (t) => {
+    if (!canToggle(t)) return;
+    const next = !t.done;
+    setItems(prev => prev.map(x => x.id === t.id ? { ...x, done: next } : x));
+    try {
+      await frappe.call({ method: "dux_crm_realty.api.crm.set_task_status", args: { task: t.id, done: next ? 1 : 0 } });
+      if (window.__refreshCRM) window.__refreshCRM();
+    } catch (e) {
+      setItems(prev => prev.map(x => x.id === t.id ? { ...x, done: t.done } : x));
+    }
   };
   const onSaved = async () => {
     if (window.__refreshCRM) await window.__refreshCRM();
@@ -501,12 +647,12 @@ function TasksTab({ lead }) {
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
         {open.length === 0 && <div style={{ fontSize: 13, color: "var(--neutral-400)" }}>No open tasks. Create one to schedule a follow-up.</div>}
-        {open.map(t => <TaskRow key={t.id} t={t} onToggle={() => toggle(t)} />)}
+        {open.map(t => <TaskRow key={t.id} t={t} canToggle={canToggle(t)} onToggle={() => toggle(t)} />)}
       </div>
       {done.length > 0 && <>
         <div className="dux-eyebrow" style={{ fontSize: 10, marginBottom: 12 }}>Completed · {done.length}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {done.map(t => <TaskRow key={t.id} t={t} onToggle={() => toggle(t)} />)}
+          {done.map(t => <TaskRow key={t.id} t={t} canToggle={canToggle(t)} onToggle={() => toggle(t)} />)}
         </div>
       </>}
       <TaskModal open={modalOpen} onClose={() => setModalOpen(false)} lead={lead}
@@ -517,15 +663,17 @@ function TasksTab({ lead }) {
 
 const TASK_ICON = { "Follow-up call": "phone", "WhatsApp": "whatsapp", "Email": "mail", "Site visit": "calendar", "Send documents": "file", "Collect documents": "file", "Payment follow-up": "rupee", "Meeting": "users", "Other": "note" };
 
-function TaskRow({ t, onToggle }) {
+function TaskRow({ t, onToggle, canToggle = true }) {
   const tone = t.priority === "high" ? "var(--error)" : t.priority === "med" ? "var(--dux-amber-600)" : "var(--neutral-400)";
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 12, padding: 12,
       border: "1px solid var(--hairline)", borderRadius: 10, background: "var(--bg)",
     }}>
-      <button onClick={onToggle} style={{
-        width: 20, height: 20, borderRadius: 6, cursor: "pointer",
+      <button onClick={canToggle ? onToggle : undefined} disabled={!canToggle}
+        title={canToggle ? (t.done ? "Mark as open" : "Mark as done") : "Only " + (t.assignedTo || "the assignee") + " or a manager can update this task"}
+        style={{
+        width: 20, height: 20, borderRadius: 6, cursor: canToggle ? "pointer" : "not-allowed", opacity: canToggle ? 1 : 0.45,
         border: "1.5px solid " + (t.done ? "var(--success)" : "var(--neutral-300)"),
         background: t.done ? "var(--success)" : "transparent",
         color: "white", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
@@ -858,8 +1006,8 @@ function PricingTab({ lead }) {
         </div>
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-        <Btn variant="accent" icon="download">Download PDF</Btn>
-        <Btn variant="outline" icon="whatsapp">Send on WhatsApp</Btn>
+        <Btn variant="accent" icon="download" disabled title="Cost-sheet PDFs aren't built yet">Download PDF</Btn>
+        <Btn variant="outline" icon="whatsapp" disabled title="WhatsApp isn't connected yet">Send on WhatsApp</Btn>
       </div>
     </div>
   );

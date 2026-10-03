@@ -85,7 +85,9 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "paid\noverdue\ndue\nscheduled"
+   "options": "scheduled\ndue\noverdue\npaid",
+   "default": "scheduled",
+   "reqd": 1
   },
   {
    "fieldname": "paid_at",

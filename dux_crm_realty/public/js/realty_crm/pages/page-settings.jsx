@@ -40,7 +40,8 @@ window.PageSettings = function PageSettings() {
         {section === "stages" && <StagesSettings />}
         {section === "sources" && <SourcesSettings />}
         {section === "email" && <EmailSettings />}
-        {section === "templates" && <SimpleListSettings title="Message templates" items={["Welcome SMS", "Visit confirmation", "Follow-up call script", "Booking confirmation", "Payment reminder", "Possession invite"]} />}
+        {section === "templates" && <SimpleListSettings title="Message templates" items={["Welcome SMS", "Visit confirmation", "Follow-up call script", "Booking confirmation", "Payment reminder", "Possession invite"]}
+          note="These templates aren't used for sending yet — SMS and WhatsApp aren't connected. Use the Email action on a lead for AI-drafted emails." />}
         {section === "integrations" && <IntegrationsSettings />}
       </div>
     </div>
@@ -50,32 +51,21 @@ window.PageSettings = function PageSettings() {
 const isMgr = () => !!(window.CRM_DATA && window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.isManager);
 const refreshCRM = async () => { if (window.__refreshCRM) await window.__refreshCRM(); };
 
+const notYet = (text) => (
+  <div style={{ marginTop: 16, padding: "12px 14px", borderRadius: 8, background: "var(--neutral-50)", border: "1px solid var(--hairline)", fontSize: 13, color: "var(--neutral-600)" }}>{text}</div>
+);
+// The prototype showed an invented GST number and address under a "Save changes" button
+// that saved nothing. Show only what is actually true of this CRM.
 function WorkspaceSettings() {
   return (
     <div>
       <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Workspace</div>
-      <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>Organisation profile and regional defaults</div>
-
-      <div style={{ marginTop: 28, display: "flex", flexDirection: "column", gap: 24 }}>
-        <Field label="Organisation name"><input className="dux-input" defaultValue="Shradha Realty Limited" /></Field>
-        <Field label="GST number"><input className="dux-input" defaultValue="27AABCS1234L1Z9" /></Field>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <Field label="Currency"><select className="dux-input" defaultValue="INR"><option>INR</option></select></Field>
-          <Field label="Timezone"><select className="dux-input" defaultValue="IST"><option>Asia/Kolkata (IST)</option></select></Field>
-        </div>
-        <Field label="Registered address"><textarea className="dux-input" rows={3} defaultValue="Plot 42, Wardhaman Nagar, Nagpur, Maharashtra 440008" /></Field>
-        <Field label="Logo">
-          <div style={{ display: "flex", alignItems: "center", gap: 14, padding: 16, border: "1px dashed var(--hairline)", borderRadius: 8, background: "var(--neutral-50)" }}>
-            <div style={{ width: 56, height: 56, borderRadius: 8, background: "var(--dux-navy)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-display)", fontWeight: 700 }}>SR</div>
-            <div style={{ flex: 1, fontSize: 12, color: "var(--neutral-600)" }}>Recommended 512×512 PNG, transparent background.</div>
-            <Btn variant="outline" size="sm">Upload</Btn>
-          </div>
-        </Field>
-        <div style={{ display: "flex", gap: 10, paddingTop: 14, borderTop: "1px solid var(--hairline)" }}>
-          <Btn variant="primary" size="sm">Save changes</Btn>
-          <Btn variant="ghost" size="sm">Cancel</Btn>
-        </div>
+      <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>Regional defaults</div>
+      <div style={{ marginTop: 28, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, maxWidth: 560 }}>
+        <Field label="Currency"><input className="dux-input" value="INR (₹)" disabled readOnly /></Field>
+        <Field label="Time zone"><input className="dux-input" value="Asia/Kolkata (IST)" disabled readOnly /></Field>
       </div>
+      {notYet("Organisation details (registered name, GST number, address, logo) aren't stored in the CRM yet. They'll be added when cost sheets and receipts are generated from the CRM.")}
     </div>
   );
 }
@@ -293,11 +283,11 @@ function EmailSettings() {
   };
   const test = async (a) => {
     setTesting(a.id);
-    try { await frappe.call({ method: "dux_crm_realty.api.crm.test_email_account", args: { account: a.id } }); frappe.show_alert({ message: "Connection OK — " + a.email, indicator: "green" }); }
+    try { await frappe.call({ method: "dux_crm_realty.api.crm.test_email_account", args: { account: a.id } }); frappe.show_alert({ message: "Connection OK — " + esc(a.email), indicator: "green" }); }
     catch (e) { frappe.msgprint(e.message || "Connection failed"); }
     setTesting(""); await refreshCRM();
   };
-  const del = (a) => frappe.confirm(`Remove <b>${a.email}</b> as a sending address?`, () => act("delete_email_account", { account: a.id }, "Removed", "orange"));
+  const del = (a) => frappe.confirm(`Remove <b>${esc(a.email)}</b> as a sending address?`, () => act("delete_email_account", { account: a.id }, "Removed", "orange"));
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -333,10 +323,13 @@ function EmailSettings() {
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {!a.isDefault && (a.mine || a.shared) && <Btn variant="ghost" size="sm" onClick={() => act("set_default_email_account", { account: a.id }, "Set as default", "green")}>Make default</Btn>}
-              <Btn variant="soft" size="sm" onClick={() => test(a)}>{testing === a.id ? "Testing…" : "Test"}</Btn>
-              <Btn variant="soft" size="sm" icon="edit" onClick={() => setEditing(a)}>Edit</Btn>
-              <Btn variant="ghost" size="sm" icon="x" onClick={() => del(a)}>Remove</Btn>
+              {/* same gate as the server: your own account, or a shared one if you are a manager */}
+              {(a.mine || (a.shared && isMgr())) && <>
+                {!a.isDefault && <Btn variant="ghost" size="sm" onClick={() => act("set_default_email_account", { account: a.id }, "Set as default", "green")}>Make default</Btn>}
+                <Btn variant="soft" size="sm" onClick={() => test(a)}>{testing === a.id ? "Testing…" : "Test"}</Btn>
+                <Btn variant="soft" size="sm" icon="edit" onClick={() => setEditing(a)}>Edit</Btn>
+                <Btn variant="ghost" size="sm" icon="x" onClick={() => del(a)}>Remove</Btn>
+              </>}
             </div>
           </div>
         ))}
@@ -357,72 +350,61 @@ function StagesSettings() {
   return (
     <div>
       <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Lead stages</div>
-      <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>Drag to reorder. Stages drive the pipeline view.</div>
-      <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontSize: 13, color: "var(--neutral-400)", marginTop: 4 }}>The pipeline every lead moves through.</div>
+      <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 8, maxWidth: 520 }}>
         {data.stages.map((s, i) => (
-          <div key={s.id} style={{
-            padding: "14px 18px", display: "flex", alignItems: "center", gap: 14,
-            background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 8,
-          }}>
-            <span style={{ color: "var(--neutral-400)", cursor: "grab" }}>⋮⋮</span>
+          <div key={s.id} style={{ padding: "12px 18px", display: "flex", alignItems: "center", gap: 14, background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 8 }}>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--neutral-400)", width: 24 }}>{(i + 1).toString().padStart(2, "0")}</span>
-            <input className="dux-input" defaultValue={s.label} style={{ flex: 1, maxWidth: 320 }} />
-            <span style={{ fontSize: 11, color: "var(--neutral-400)" }}>tone:</span>
-            <select className="dux-input" defaultValue={s.tone} style={{ width: 110 }}>
-              <option>info</option><option>amber</option><option>coral</option><option>success</option><option>neutral</option>
-            </select>
-            <Btn variant="ghost" size="sm">Remove</Btn>
+            <StageBadge stage={s.id} />
+            <span style={{ fontSize: 12, color: "var(--neutral-400)", marginLeft: "auto" }}>{data.leads.filter(l => l.stage === s.id).length} leads</span>
           </div>
         ))}
-        <Btn variant="outline" size="sm" icon="plus" style={{ alignSelf: "flex-start", marginTop: 8 }}>Add stage</Btn>
       </div>
+      {notYet("Stages can't be renamed or reordered from here yet — ask DUX if you need a change.")}
     </div>
   );
 }
 
-function SimpleListSettings({ title, items }) {
+function SimpleListSettings({ title, items, note }) {
   return (
     <div>
       <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>{title}</div>
       <div style={{ marginTop: 24, display: "flex", flexWrap: "wrap", gap: 8 }}>
         {items.map(it => (
-          <div key={it} style={{ padding: "8px 14px", background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 999, fontSize: 13, fontWeight: 500, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            {it}
-            <span style={{ color: "var(--neutral-400)", cursor: "pointer" }}>×</span>
-          </div>
+          <div key={it} style={{ padding: "8px 14px", background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 999, fontSize: 13, fontWeight: 500 }}>{it}</div>
         ))}
-        <button style={{ padding: "8px 14px", background: "transparent", border: "1px dashed var(--neutral-300)", borderRadius: 999, fontSize: 13, color: "var(--neutral-600)", cursor: "pointer" }}>+ Add</button>
       </div>
+      {note && notYet(note)}
     </div>
   );
 }
 
+// The prototype showed WhatsApp, Tally, MagicBricks and Google Calendar as "CONNECTED".
+// None of them is — and a client reading that would expect visit reminders to go out.
 function IntegrationsSettings() {
   const items = [
-    { name: "WhatsApp Business", desc: "Send templated messages and visit reminders", on: true },
-    { name: "Tally Prime", desc: "Sync receipts and invoices to accounting", on: true },
-    { name: "MagicBricks Lead Sync", desc: "Auto-import leads from listings", on: true },
-    { name: "99acres Lead Sync", desc: "Auto-import leads from listings", on: false },
-    { name: "Google Calendar", desc: "Mirror site visits to your team's calendars", on: true },
-    { name: "RERA Public Portal", desc: "Pull project status & inventory disclosures", on: false },
+    { name: "WhatsApp Business", desc: "Send templated messages and visit reminders" },
+    { name: "Tally Prime", desc: "Sync receipts and invoices to accounting" },
+    { name: "MagicBricks lead sync", desc: "Auto-import leads from listings" },
+    { name: "99acres lead sync", desc: "Auto-import leads from listings" },
+    { name: "Google Calendar", desc: "Mirror site visits to your team's calendars" },
+    { name: "RERA public portal", desc: "Pull project status & inventory disclosures" },
   ];
   return (
     <div>
       <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700 }}>Integrations</div>
-      <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 10 }}>
+      {notYet("None of these integrations is set up yet. Tell DUX which ones you need first and they'll be connected.")}
+      <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
         {items.map(it => (
           <div key={it.name} style={{
             padding: 18, background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 10,
-            display: "grid", gridTemplateColumns: "1fr auto auto", gap: 14, alignItems: "center",
+            display: "grid", gridTemplateColumns: "1fr auto", gap: 14, alignItems: "center",
           }}>
             <div>
               <div style={{ fontSize: 14, fontWeight: 600 }}>{it.name}</div>
               <div style={{ fontSize: 12, color: "var(--neutral-400)", marginTop: 2 }}>{it.desc}</div>
             </div>
-            <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 999, background: it.on ? "rgba(86,138,79,0.12)" : "var(--neutral-100)", color: it.on ? "var(--success)" : "var(--neutral-400)" }}>
-              {it.on ? "CONNECTED" : "OFF"}
-            </span>
-            <Btn variant={it.on ? "outline" : "primary"} size="sm">{it.on ? "Manage" : "Connect"}</Btn>
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 999, background: "var(--neutral-100)", color: "var(--neutral-400)" }}>NOT SET UP</span>
           </div>
         ))}
       </div>

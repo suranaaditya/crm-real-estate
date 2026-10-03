@@ -114,14 +114,25 @@ window.RealtyApp = function RealtyApp() {
     setNonce(n => n + 1);
   };
 
+  // Returns true on success so the form only closes once the lead is really saved. On a
+  // server error frappe.call has already shown the server's message (the old extra
+  // msgprint here rendered "[object Object]"), and the form stays open, still filled in.
   const handleSave = async (form) => {
+    let r;
     try {
-      const r = await frappe.call({ method: "dux_crm_realty.api.crm.create_lead", args: { payload: form } });
-      frappe.show_alert({ message: __("Lead {0} created", [r.message.lead_id]), indicator: "green" });
-      await window.__refreshCRM();
+      r = await frappe.call({ method: "dux_crm_realty.api.crm.create_lead", args: { payload: form } });
     } catch (e) {
-      frappe.msgprint({ title: __("Could not create lead"), message: e.message || String(e), indicator: "red" });
+      // e.g. a duplicate phone added by a colleague since this page loaded: reload so the
+      // form's duplicate warning (and its "different person" box) can show the match
+      try { await window.__refreshCRM(); } catch (_e) {}
+      return false;
     }
+    frappe.show_alert({ message: __("Lead {0} created", [r.message.lead_id]), indicator: "green" });
+    // the lead IS saved — a failed list refresh must not leave the filled form open, where
+    // a second Save would create it again
+    try { await window.__refreshCRM(); }
+    catch (e) { frappe.show_alert({ message: __("Lead saved. Reload the page to see it in the list."), indicator: "orange" }); }
+    return true;
   };
 
   return (

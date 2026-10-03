@@ -14,8 +14,13 @@ window.PageReports = function PageReports() {
   const sourceTotal = Object.values(sourceCounts).reduce((a, b) => a + b, 0);
   // ONE ordering shared by the donut and its legend — they used to iterate different
   // orders (unsorted vs sorted), so 9 of 12 legend swatches named the wrong arc.
-  const sourceRows = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]);
-  const sourcePalette = ["#244C5A", "#E8A95B", "#568A4F", "#B5462C", "#8564A8", "#5C6B73"];
+  // 11 sources over a 6-colour palette meant every colour named two sources. Show the top 5
+  // and fold the rest into "Other"; the CSV export keeps every source.
+  const allSources = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]);
+  const sourceRows = allSources.length > 6
+    ? [...allSources.slice(0, 5), ["Other", allSources.slice(5).reduce((a, [, v]) => a + v, 0)]]
+    : allSources;
+  const sourcePalette = ["#244C5A", "#E8A95B", "#568A4F", "#B5462C", "#8564A8", "#B8BFC4"];
 
   // Monthly trend — the trailing 6 months ending at "today", computed from real visits and
   // bookings. (This was a hardcoded mock array that showed ~296 visits against 32 real ones.)
@@ -69,7 +74,17 @@ window.PageReports = function PageReports() {
           <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, marginTop: 4 }}>Reports & Analytics</div>
         </div>
         <div style={{ flex: 1 }} />
-        <Btn variant="outline" size="sm" icon="files">Export PDF</Btn>
+        {/* was an inert "Export PDF"; exports the same figures this page shows */}
+        <Btn variant="outline" size="sm" icon="files" onClick={() => {
+          const rows = [];
+          rows.push(["Headline", "Gross bookings (BSP)", data.bookings.reduce((a, b) => a + (b.bsp || 0), 0)]);
+          rows.push(["Headline", "Lead to booking", leadToBooking]);
+          rows.push(["Headline", "Average sales cycle", avgCycle]);
+          months.forEach(m => rows.push(["Visits & bookings · " + m.key, "Site visits", m.visits], ["Visits & bookings · " + m.key, "Bookings", m.bookings]));
+          allSources.forEach(([k, v]) => rows.push(["Lead sources", k, v]));
+          byProject.forEach(p => rows.push(["Units by project", p.label, (p.sold || 0) + " sold of " + (p.total || 0)]));
+          window.downloadCsv("crm-report-" + data.today + ".csv", ["Section", "Item", "Value"], rows);
+        }}>Export CSV</Btn>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>

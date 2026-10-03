@@ -91,6 +91,14 @@ def _ledger_perms(exec_create=False, manager_write=False):
 	return rows
 
 
+def _sysmgr_only_perms():
+	"""Secrets doctype (Realty Email Account): no Realty role needs desk/REST access — every
+	app path uses frappe.get_all / ignore_permissions. Open DocPerms let any rep repoint an
+	account's SMTP host and have test_email_account hand them its Gmail App Password."""
+	return [{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1,
+		"report": 1, "export": 1, "print": 1, "email": 1, "share": 1}]
+
+
 def make_doctype(name, fields, autoname=None, istable=0, title_field=None,
 		search_fields=None, perms=None, allow_rename=1):
 	if frappe.db.exists("DocType", name):
@@ -168,7 +176,9 @@ def create_doctypes():
 	])
 
 	# ---- masters ----
-	make_doctype("Realty Lead Stage", autoname="field:stage_id",
+	# stages + sources: renaming one through the desk re-links every lead and breaks the code
+	# that keys on "Channel Partner" / "booked" — no rename, and reps may only read
+	make_doctype("Realty Lead Stage", autoname="field:stage_id", perms=_ledger_perms(), allow_rename=0,
 		title_field="label", fields=[
 		f("stage_id", "Data", "Stage ID", reqd=1, unique=1, in_list_view=1),
 		f("label", "Data", "Label", reqd=1, in_list_view=1),
@@ -176,7 +186,8 @@ def create_doctypes():
 		f("sort_order", "Int", "Sort Order", in_list_view=1),
 	])
 
-	make_doctype("Realty Lead Source", autoname="field:source_name", fields=[
+	make_doctype("Realty Lead Source", autoname="field:source_name",
+		perms=_ledger_perms(manager_write=True), allow_rename=0, fields=[
 		f("source_name", "Data", "Source Name", reqd=1, unique=1, in_list_view=1),
 	])
 
@@ -214,7 +225,7 @@ def create_doctypes():
 		title_field="partner_name", search_fields="contact_person,phone", fields=[
 		f("partner_name", "Data", "Partner Name", reqd=1, unique=1, in_list_view=1),
 		f("contact_person", "Data", "Contact Person", in_list_view=1),
-		f("tier", "Select", "Tier", options="Platinum\nGold\nSilver", in_list_view=1),
+		f("tier", "Select", "Tier", options="\nPlatinum\nGold\nSilver", in_list_view=1),
 		f("rera", "Data", "RERA No."),
 		f("phone", "Data", "Phone"),
 		f("email", "Data", "Email"),
@@ -273,6 +284,9 @@ def create_doctypes():
 		f("facing", "Select", "Facing", options="\nEast\nWest\nNorth\nSouth"),
 		f("price", "Currency", "Price", in_list_view=1),
 		f("status", "Select", "Status", options="Available\nBlocked\nReserved\nSold", in_list_view=1, default="Available"),
+		f("sold_to_lead", "Link", "Sold To (Lead)", options="Realty Lead"),
+		f("sold_to_contact", "Data", "Sold To (Name)"),
+		f("sold_on", "Date", "Sold On"),
 		# free text from the client's own inventory sheet ("Front Furnished", "Back
 		# Customizable" …) — shown in the unit panel
 		f("remarks", "Small Text", "Remarks"),
@@ -300,6 +314,8 @@ def create_doctypes():
 		f("col_break_lead2", "Column Break"),
 		f("source", "Link", "Source", options="Realty Lead Source"),
 		f("channel_partner", "Link", "Channel Partner", options="Realty Channel Partner"),
+		f("referred_by", "Data", "Referred By"),
+		f("referred_by_phone", "Data", "Referrer Phone"),
 		f("sales_owner", "Link", "Owner", options="Realty Sales Owner"),
 		f("sec_break_dates", "Section Break", "Timeline"),
 		f("lead_created", "Date", "Created On"),
@@ -373,7 +389,7 @@ def create_doctypes():
 		f("pct", "Float", "Percent of BSP"),
 		f("amount", "Currency", "Amount", in_list_view=1),
 		f("due_date", "Date", "Due Date", in_list_view=1),
-		f("status", "Select", "Status", options="paid\noverdue\ndue\nscheduled", in_list_view=1),
+		f("status", "Select", "Status", options="scheduled\ndue\noverdue\npaid", in_list_view=1, default="scheduled", reqd=1),
 		f("paid_at", "Date", "Paid On"),
 		f("receipt_no", "Data", "Receipt No."),
 	], perms=_perms(finance_write=True))
@@ -384,7 +400,7 @@ def create_doctypes():
 		f("campaign_id", "Data", "Campaign ID", reqd=1, unique=1, in_list_view=1),
 		f("campaign_name", "Data", "Campaign Name", reqd=1, in_list_view=1),
 		f("channel", "Data", "Channel", in_list_view=1),
-		f("status", "Select", "Status", options="active\nended\nscheduled", in_list_view=1),
+		f("status", "Select", "Status", options="scheduled\nactive\nended", in_list_view=1, default="scheduled"),
 		f("col_break_camp", "Column Break"),
 		f("start_date", "Date", "Start Date"),
 		f("end_date", "Date", "End Date"),
@@ -542,7 +558,7 @@ def create_doctypes():
 	# outgoing, so it can't disturb other apps on this shared box. owner_user blank = a
 	# shared/global account anyone can use; otherwise it belongs to that login.
 	make_doctype("Realty Email Account", autoname="field:account_id", title_field="email_id",
-		search_fields="email_id,sender_name", allow_rename=0, fields=[
+		search_fields="email_id,sender_name", allow_rename=0, perms=_sysmgr_only_perms(), fields=[
 		f("account_id", "Data", "Account ID", reqd=1, unique=1, in_list_view=1),
 		f("email_id", "Data", "Email Address", reqd=1, in_list_view=1),
 		f("sender_name", "Data", "Sender Name", in_list_view=1),

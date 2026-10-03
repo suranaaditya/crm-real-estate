@@ -10,11 +10,18 @@ window.PageDashboard = function PageDashboard({ onNav }) {
     return `${DAYS[d.getDay()]} · ${String(d.getDate()).padStart(2, "0")} ${MON[d.getMonth()]} ${d.getFullYear()}`;
   })();
   // "today" comes from the bootstrap (the real date, site time zone) — see CLAUDE.md
-  const visitsToday = data.visits.filter(v => v.date === data.today).length;
-  const visitsWeek = data.visits.filter(v => {
-    const d = new Date(v.date), t = new Date(data.today);
-    const diff = (d - t) / 86400000; return diff >= -3 && diff <= 7;
-  }).length;
+  // "You have N site visits today" counted the whole team, and "this week" was a rolling
+  // -3..+7 day window. Count a rep's own visits, over the calendar's Monday–Sunday week.
+  const meName = (data.currentUser && data.currentUser.name) || "";
+  const meIsRep = (data.owners || []).some(o => o.name === meName);
+  const isMgr = !!(data.currentUser && data.currentUser.isManager);
+  const mineV = (v) => !meIsRep || v.ownerName === meName;          // banner: "You have N visits today"
+  const tileV = (v) => isMgr || !meIsRep || v.ownerName === meName; // KPI tile: the team, for a manager
+  const visitsToday = data.visits.filter(v => v.date === data.today && v.status !== "no-show" && mineV(v)).length;
+  const _wk = new Date(data.today + "T00:00:00"); _wk.setDate(_wk.getDate() - (_wk.getDay() + 6) % 7);
+  const _iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const wkFrom = _iso(_wk); const _we = new Date(_wk); _we.setDate(_we.getDate() + 6); const wkTo = _iso(_we);
+  const visitsWeek = data.visits.filter(v => v.date >= wkFrom && v.date <= wkTo && tileV(v)).length;
   const overdue = data.paymentDues.filter(p => p.status === "overdue").length;
   const overdueAmt = data.paymentDues.filter(p => p.status === "overdue").reduce((a, p) => a + (p.amount || 0), 0);
 

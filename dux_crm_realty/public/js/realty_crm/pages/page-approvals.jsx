@@ -125,7 +125,7 @@ function PendingRow({ item, act }) {
     return (
       <RowShell icon="building" idText={item.unit}
         kindPill={<span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: "var(--neutral-100)", color: "var(--neutral-700)", letterSpacing: "0.04em" }}>{(item.kind || "Hold").toUpperCase()} · {(item.project || "").replace("P-", "")}</span>}
-        requestedBy={item.requestedBy} requestedByRole={item.requestedByRole} when={item.requestedOn}
+        requestedBy={item.requestedBy || item.filedBy} requestedByRole={item.requestedByRole} when={item.requestedOn}
         actions={<>
           <Btn variant="accent" size="sm" icon="check" onClick={() => act("approve_hold", { hold_id: item.id }, item.unit + " approved", "green")}>Approve</Btn>
           <Btn variant="ghost" size="sm" onClick={() => act("reject_hold", { hold_id: item.id }, "Request declined", "orange")}>Decline</Btn>
@@ -137,7 +137,7 @@ function PendingRow({ item, act }) {
   return (
     <RowShell icon="file" idText={item.id}
       kindPill={<span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: "var(--dux-amber-100)", color: "var(--dux-amber-600)", letterSpacing: "0.04em" }}>SHARE{item.channel === "Comms" ? " · COMMS" : ""}</span>}
-      requestedBy={item.requestedBy} requestedByRole={item.requestedByRole} when={item.requestedOn}
+      requestedBy={item.requestedBy || item.filedBy} requestedByRole={item.requestedByRole} when={item.requestedOn}
       actions={<>
         <Btn variant="accent" size="sm" icon="check" onClick={() => act("approve_share", { share_id: item.id }, "Share approved", "green")}>Approve</Btn>
         <Btn variant="ghost" size="sm" onClick={() => act("reject_share", { share_id: item.id }, "Request declined", "orange")}>Decline</Btn>
@@ -154,7 +154,7 @@ function ActiveRow({ item, act }) {
     return (
       <RowShell icon="building" idText={item.unit}
         kindPill={<span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: "var(--info-bg)", color: "var(--info)", letterSpacing: "0.04em" }}>{(item.kind || "Hold").toUpperCase()} · {(item.project || "").replace("P-", "")}</span>}
-        requestedBy={item.requestedBy} requestedByRole={item.requestedByRole} when={item.approvedBy ? "approved by " + item.approvedBy : item.requestedOn}
+        requestedBy={item.requestedBy || item.filedBy} requestedByRole={item.requestedByRole} when={item.approvedBy ? "approved by " + item.approvedBy : item.requestedOn}
         actions={<Btn variant="outline" size="sm" onClick={() => act("release_hold", { hold_id: item.id }, "Released " + item.unit, "blue")}>Release</Btn>}>
         <HoldRecipientTag item={item} />
       </RowShell>
@@ -163,7 +163,7 @@ function ActiveRow({ item, act }) {
   return (
     <RowShell icon="file" idText={item.id}
       kindPill={<span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: "var(--success-bg)", color: "var(--success)", letterSpacing: "0.04em" }}>SHARED · {item.accessCount || 0} open{(item.accessCount || 0) === 1 ? "" : "s"}</span>}
-      requestedBy={item.requestedBy} requestedByRole={item.requestedByRole} when={item.approvedBy ? "approved by " + item.approvedBy : item.requestedOn}
+      requestedBy={item.requestedBy || item.filedBy} requestedByRole={item.requestedByRole} when={item.approvedBy ? "approved by " + item.approvedBy : item.requestedOn}
       actions={<>
         {item.shareUrl && <Btn variant="outline" size="sm" icon="copy" onClick={() => copyShareLink(item.shareUrl)}>Copy link</Btn>}
         <Btn variant="ghost" size="sm" onClick={() => act("revoke_share", { share_id: item.id }, "Share revoked", "orange")}>Revoke</Btn>

@@ -75,11 +75,19 @@ window.Textarea = function Textarea(props) {
     }} />;
 };
 
+// Close a dialog on a backdrop click only when the press ALSO started on the backdrop.
+// Selecting text inside a dialog and releasing outside it fires "click" on the backdrop,
+// which used to close the dialog and throw away an AI email draft or a typed call log.
+window.backdropClose = (onClose) => ({
+  onMouseDown: (e) => { e.currentTarget.dataset.down = e.target === e.currentTarget ? "1" : ""; },
+  onClick: (e) => { if (e.target === e.currentTarget && e.currentTarget.dataset.down === "1") onClose(); },
+});
+
 // ---------- Modal shell ----------
 window.Modal = function Modal({ open, onClose, title, subtitle, eyebrow, width = 720, children, footer }) {
   if (!open) return null;
   return (
-    <div onClick={onClose} style={{
+    <div {...backdropClose(onClose)} style={{
       position: "absolute", inset: 0, background: "rgba(15,26,46,0.45)",
       display: "flex", alignItems: "center", justifyContent: "center",
       zIndex: 60, backdropFilter: "blur(4px)",
@@ -114,35 +122,339 @@ window.Modal = function Modal({ open, onClose, title, subtitle, eyebrow, width =
   );
 };
 
+// ---------- Type-to-search pickers ----------
+// A plain <select> of 334 channel partners was unusable — and it sat below the fold of the
+// New Lead form, so reps never found it. SearchSelect filters as you type; `footer` can add
+// an action (e.g. "Add a new partner") under the matches.
+const pickerList = {
+  position: "absolute", left: 0, right: 0, minWidth: 260, top: "calc(100% + 4px)", zIndex: 5,
+  background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 8,
+  boxShadow: "var(--shadow-lg, 0 8px 24px rgba(15,26,46,0.14))", maxHeight: 260, overflowY: "auto",
+};
+const pickerRow = (on) => ({
+  padding: "8px 12px", cursor: "pointer", background: on ? "var(--neutral-50)" : "transparent",
+  borderBottom: "1px solid var(--hairline)",
+});
+
+window.SearchSelect = function SearchSelect({ value, options, onChange, placeholder, emptyText = "No match", footer, invalid }) {
+  const [q, setQ] = useStateF("");
+  const [openList, setOpenList] = useStateF(false);
+  const [hi, setHi] = useStateF(0);
+  const selected = options.find(o => o.value === value);
+  const needle = q.trim().toLowerCase();
+  const matches = (needle
+    ? options.filter(o => (o.label + " " + (o.sub || "")).toLowerCase().includes(needle))
+    : options).slice(0, 50);
+  const pick = (o) => { onChange(o.value, o); setQ(""); setOpenList(false); };
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpenList(true); setHi(h => Math.min(h + 1, Math.max(matches.length - 1, 0))); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter") { if (openList && matches[hi]) { e.preventDefault(); pick(matches[hi]); } }
+    else if (e.key === "Escape" && openList) { e.stopPropagation(); setOpenList(false); }
+  };
+  return (
+    <div style={{ position: "relative" }}>
+      <Input placeholder={placeholder} value={openList ? q : (selected ? selected.label : "")}
+        onFocus={() => { setOpenList(true); setQ(""); setHi(0); }}
+        onBlur={() => setTimeout(() => setOpenList(false), 150)}
+        onChange={(e) => { setQ(e.target.value); setOpenList(true); setHi(0); }}
+        onKeyDown={onKey}
+        style={{ paddingRight: 34, ...(invalid ? { borderColor: "var(--error)" } : {}) }} />
+      <span style={{ position: "absolute", right: 12, top: 12, pointerEvents: "none", color: "var(--neutral-400)" }}>
+        <Icon name="search" size={14} />
+      </span>
+      {openList && (
+        <div style={pickerList}>
+          {matches.map((o, i) => (
+            <div key={o.value} onMouseDown={(e) => { e.preventDefault(); pick(o); }} onMouseEnter={() => setHi(i)} style={pickerRow(i === hi)}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--neutral-900)" }}>{o.label}</div>
+              {o.sub && <div style={{ fontSize: 11, color: "var(--neutral-400)", marginTop: 2 }}>{o.sub}</div>}
+            </div>
+          ))}
+          {matches.length === 0 && <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--neutral-400)" }}>{emptyText}</div>}
+          {footer && footer(q.trim(), () => setOpenList(false))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Free text with suggestions: the value is whatever is typed; picking a suggestion fills it.
+window.SuggestInput = function SuggestInput({ value, onChange, suggest, onPick, placeholder, invalid }) {
+  const [openList, setOpenList] = useStateF(false);
+  const [hi, setHi] = useStateF(0);
+  const needle = (value || "").trim().toLowerCase();
+  const matches = openList && needle.length >= 2 ? suggest(needle).slice(0, 8) : [];
+  const pick = (o) => { onPick(o); setOpenList(false); };
+  const onKey = (e) => {
+    if (!matches.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi(h => Math.min(h + 1, matches.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter" && matches[hi]) { e.preventDefault(); pick(matches[hi]); }
+    else if (e.key === "Escape") { e.stopPropagation(); setOpenList(false); }
+  };
+  return (
+    <div style={{ position: "relative" }}>
+      <Input placeholder={placeholder} value={value || ""}
+        onFocus={() => setOpenList(true)} onBlur={() => setTimeout(() => setOpenList(false), 150)}
+        onChange={(e) => { onChange(e.target.value); setOpenList(true); setHi(0); }}
+        onKeyDown={onKey} style={invalid ? { borderColor: "var(--error)" } : {}} />
+      {matches.length > 0 && (
+        <div style={pickerList}>
+          {matches.map((o, i) => (
+            <div key={o.key} onMouseDown={(e) => { e.preventDefault(); pick(o); }} onMouseEnter={() => setHi(i)} style={pickerRow(i === hi)}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--neutral-900)" }}>{o.label}</div>
+              {o.sub && <div style={{ fontSize: 11, color: "var(--neutral-400)", marginTop: 2 }}>{o.sub}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ---------- Lead capture helpers (shared by New Lead + Edit details) ----------
+window.phoneKey = (p) => String(p || "").replace(/\D/g, "").slice(-10);
+// Other leads with the same last-10-digit phone — how three copies of one walk-in got saved.
+window.leadsWithPhone = (phone, excludeId) => {
+  const k = window.phoneKey(phone);
+  if (k.length < 10) return [];
+  return ((window.CRM_DATA && window.CRM_DATA.leads) || [])
+    .filter(l => l.id !== excludeId && window.phoneKey(l.phone) === k);
+};
+const SOURCE_PARTNER = "Channel Partner";
+const SOURCE_REFERENCE = "Reference";
+
+// Same rule as the server's _clean_phone: a 10-digit mobile (a +91 / 0 prefix is fine), or a
+// deliberate foreign number starting with "+". Returns the cleaned value or null.
+window.cleanPhone = (raw) => {
+  const t = String(raw || "").trim();
+  let d = t.replace(/\D/g, "");
+  if (t.startsWith("+") && !d.startsWith("91") && d.length >= 8 && d.length <= 15) return "+" + d;
+  if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
+  else if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
+  return d.length === 10 ? d : null;
+};
+// Rupees from "7500000", "75,00,000", "₹75 L", "1.3 Cr", "75 lakh" — mirrors _parse_budget.
+// Returns a number, null for blank, or NaN when it can't be read.
+window.parseBudget = (raw) => {
+  const t = String(raw == null ? "" : raw).toLowerCase().replace(/₹|rs\.?|inr|,|\s/g, "");
+  if (!t) return null;
+  const m = t.match(/^(\d+(?:\.\d+)?)(cr|crore|crores|l|lac|lacs|lakh|lakhs|k)?$/);
+  if (!m) return NaN;
+  const mult = { cr: 1e7, crore: 1e7, crores: 1e7, l: 1e5, lac: 1e5, lacs: 1e5, lakh: 1e5, lakhs: 1e5, k: 1e3 }[m[2]] || 1;
+  return parseFloat(m[1]) * mult;
+};
+window.budgetError = (raw) => {
+  const v = window.parseBudget(raw);
+  if (v === null) return null;
+  if (isNaN(v)) return "Enter rupees, e.g. 7500000, 75 L or 1.3 Cr";
+  if (v > 0 && v < 100000) return "Too small — enter rupees, or as 75 L / 1.3 Cr";
+  return null;
+};
+
+// Checks shared by capture and edit; returns { field: message }.
+window.validateLeadContact = (form, { dupes, dupeOk }) => {
+  const e = {};
+  if (!(form.name || "").trim()) e.name = "Required";
+  if (!(form.phone || "").trim()) e.phone = "Required";
+  else if (!window.cleanPhone(form.phone)) e.phone = "Enter a 10-digit mobile number";
+  if ((form.email || "").trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) e.email = "Enter a valid email";
+  if (!form.source) e.source = "Choose where this lead came from";
+  if (form.source === SOURCE_PARTNER && !form.channelPartner) e.channelPartner = "Choose the channel partner, or add a new one";
+  if (form.source === SOURCE_REFERENCE && !(form.referredBy || "").trim()) e.referredBy = "Who referred this lead?";
+  if ((form.referredByPhone || "").trim() && !window.cleanPhone(form.referredByPhone)) e.referredByPhone = "Enter a 10-digit mobile number";
+  if (dupes.length && !dupeOk) e.dupe = "Confirm this is a different person";
+  return e;
+};
+
+// Source + "who brought it" (partner or referrer). Changing the source clears the other
+// source's field: a partner picked and then left behind when the rep switched to
+// Reference used to be saved invisibly — that is how "Pravin Ganorkar" got stamped on
+// three Reference leads.
+window.LeadSourceFields = function LeadSourceFields({ form, patch, errors }) {
+  const data = window.CRM_DATA;
+  const [adding, setAdding] = useStateF(null);   // new-partner draft | null
+  const [busy, setBusy] = useStateF(false);
+  const whoRef = useRefF(null);
+  // The partner field used to appear below the fold of the form, so reps never saw it.
+  // Bring the partner / referrer field into view whenever the source asks for one.
+  useEffectF(() => {
+    if ((form.source === SOURCE_PARTNER || form.source === SOURCE_REFERENCE) && whoRef.current)
+      whoRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [form.source, !!adding]);
+  const partners = data.channelPartners || [];
+  const partnerOptions = partners.map(cp => ({ value: cp.id, label: cp.name,
+    sub: [cp.contact, cp.phone].filter(Boolean).join(" · ") }));
+  const selectedPartner = partners.find(cp => cp.id === form.channelPartner);
+
+  const savePartner = async () => {
+    if (!adding.name.trim()) { frappe.show_alert({ message: "Enter the partner's name", indicator: "orange" }); return; }
+    setBusy(true);
+    try {
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.create_channel_partner", args: { payload: adding } });
+      const cp = r.message.partner;
+      if (!(data.channelPartners || []).some(p => p.id === cp.id)) data.channelPartners = [...(data.channelPartners || []), cp];
+      patch({ channelPartner: cp.id });
+      setAdding(null);
+      frappe.show_alert({ message: (r.message.existing ? "Already in the list — selected " : "Partner added: ") + esc(cp.name), indicator: "green" });
+    } catch (e) { /* frappe.call already showed the server's message */ }
+    finally { setBusy(false); }
+  };
+
+  // referrers: existing leads (a customer referring a friend) and channel partners
+  const suggestReferrer = (needle) => {
+    const out = [];
+    for (const l of data.leads || []) {
+      if ((l.name || "").toLowerCase().includes(needle) || window.phoneKey(l.phone).includes(needle.replace(/\D/g, "") || "~"))
+        out.push({ key: "L" + l.id, label: l.name, sub: [l.phone, l.projectName, l.id].filter(Boolean).join(" · "), name: l.name, phone: l.phone });
+      if (out.length >= 6) break;
+    }
+    for (const cp of partners) {
+      if (out.length >= 8) break;
+      if ((cp.name || "").toLowerCase().includes(needle))
+        out.push({ key: "P" + cp.id, label: cp.name, sub: ["Channel partner", cp.phone].filter(Boolean).join(" · "), name: cp.name, phone: cp.phone });
+    }
+    return out;
+  };
+
+  return (
+    <>
+      <Field label="Source" required error={errors.source} span={2}>
+        <Select value={form.source} onChange={(e) => { setAdding(null); patch({ source: e.target.value, channelPartner: "", referredBy: "", referredByPhone: "" }); }}>
+          <option value="">— Select source —</option>
+          {data.sources.map(s => <option key={s} value={s}>{s}</option>)}
+        </Select>
+      </Field>
+
+      {form.source === SOURCE_PARTNER && !adding && (
+        <Field label="Channel partner" required error={errors.channelPartner} span={2}
+          hint={selectedPartner ? [selectedPartner.contact, selectedPartner.phone].filter(Boolean).join(" · ") || null : "Type a name, contact person or phone to search " + partners.length + " partners"}>
+          <SearchSelect value={form.channelPartner} options={partnerOptions} invalid={!!errors.channelPartner}
+            placeholder="Search partners…" emptyText="No partner matches"
+            onChange={(v) => patch({ channelPartner: v })}
+            footer={(q, close) => (
+              <div onMouseDown={(e) => { e.preventDefault(); close(); patch({ channelPartner: "" }); setAdding({ name: q, contact: "", phone: "" }); }}
+                style={{ padding: "10px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "var(--dux-navy)", display: "flex", alignItems: "center", gap: 8 }}>
+                <Icon name="plus" size={13} /> {q ? "Add “" + q + "” as a new partner" : "Add a new partner"}
+              </div>
+            )} />
+        </Field>
+      )}
+
+      {form.source === SOURCE_PARTNER && adding && (
+        <div style={{ gridColumn: "span 2", padding: 14, border: "1px solid var(--hairline)", borderRadius: 10, background: "var(--neutral-50)" }}>
+          <div className="dux-eyebrow" style={{ fontSize: 10, marginBottom: 10 }}>NEW CHANNEL PARTNER</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Partner / firm name" required span={2}>
+              <Input value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} placeholder="e.g. Sai Properties" />
+            </Field>
+            <Field label="Contact person">
+              <Input value={adding.contact} onChange={(e) => setAdding({ ...adding, contact: e.target.value })} />
+            </Field>
+            <Field label="Phone">
+              <Input value={adding.phone} onChange={(e) => setAdding({ ...adding, phone: e.target.value })} />
+            </Field>
+          </div>
+          {errors.channelPartner && <div style={{ fontSize: 12, color: "var(--error)", marginTop: 10 }}>
+            Click “Add partner” to save this partner first — or Cancel and pick an existing one.</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+            <Btn variant="ghost" size="sm" onClick={() => setAdding(null)} disabled={busy}>Cancel</Btn>
+            <Btn variant="primary" size="sm" icon="check" onClick={savePartner} disabled={busy}>{busy ? "Saving…" : "Add partner"}</Btn>
+          </div>
+        </div>
+      )}
+
+      {form.source === SOURCE_REFERENCE && (
+        <>
+          <Field label="Referred by" required error={errors.referredBy} hint="Type a name — or pick an existing customer / partner">
+            <SuggestInput value={form.referredBy} invalid={!!errors.referredBy} placeholder="Who referred them?"
+              onChange={(v) => patch({ referredBy: v })} suggest={suggestReferrer}
+              onPick={(o) => patch({ referredBy: o.name, referredByPhone: o.phone || form.referredByPhone })} />
+          </Field>
+          <Field label="Referrer's phone" error={errors.referredByPhone}>
+            <Input value={form.referredByPhone} onChange={(e) => patch({ referredByPhone: e.target.value })} placeholder="Optional" />
+          </Field>
+        </>
+      )}
+      {/* zero-height anchor AFTER the partner/referrer fields, so "nearest" reveals them */}
+      <div ref={whoRef} style={{ gridColumn: "span 2", height: 0, marginTop: -16 }} />
+    </>
+  );
+};
+
+// "This number is already in the CRM" — capture is blocked until the rep confirms.
+window.DuplicatePhoneWarning = function DuplicatePhoneWarning({ dupes, ok, onOk, error }) {
+  if (!dupes.length) return null;
+  return (
+    <div style={{ gridColumn: "span 2", padding: 12, borderRadius: 10, background: "var(--dux-amber-100)", border: "1px solid " + (error ? "var(--error)" : "var(--dux-amber)") }}>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>This phone number is already in the CRM</div>
+      {dupes.slice(0, 4).map(l => (
+        <div key={l.id} style={{ fontSize: 12, color: "var(--neutral-800)", marginBottom: 2 }}>
+          <strong>{l.id}</strong> · {l.name}{l.projectName ? " · " + l.projectName : ""} · {l.ownerName || "Unassigned"}{l.stage ? " · " + l.stage : ""}
+        </div>
+      ))}
+      {dupes.length > 4 && <div style={{ fontSize: 12, color: "var(--neutral-600)" }}>…and {dupes.length - 4} more</div>}
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12, cursor: "pointer" }}>
+        <input type="checkbox" checked={ok} onChange={(e) => onOk(e.target.checked)} />
+        This is a different person (e.g. a broker's shared number) — add a new lead anyway
+      </label>
+    </div>
+  );
+};
+
 // ---------- New Lead modal ----------
+const blankLead = () => ({
+  name: "", phone: "", email: "", occupation: "", city: "Nagpur",
+  source: "", channelPartner: "", referredBy: "", referredByPhone: "",
+  project: "", interest: "", budget: "",
+  stage: "new", priority: "medium", notes: "",
+});
+const LEAD_CONFIGS = ["1 BHK", "2 BHK", "3 BHK", "4 BHK", "Penthouse", "Row House", "Plot", "Office Suite", "Retail Shop", "Showroom"];
+
 window.NewLeadModal = function NewLeadModal({ open, onClose, onSave }) {
   const data = window.CRM_DATA;
-  const [form, setForm] = useStateF({
-    name: "", phone: "", email: "", occupation: "",
-    source: "Website", channelPartner: "",
-    project: "P-AN", interest: "3 BHK", budget: "",
-    owner: "U1", city: "Nagpur",
-    stage: "new", priority: "medium",
-    notes: "",
-  });
+  const [form, setForm] = useStateF(blankLead);
   const [step, setStep] = useStateF(1);
   const [errors, setErrors] = useStateF({});
+  const [dupeOk, setDupeOk] = useStateF(false);
+  const [saving, setSaving] = useStateF(false);
 
-  const update = (k, v) => setForm({ ...form, [k]: v });
+  // A fresh, blank form EVERY time it opens. The modal stays mounted between uses, so it
+  // used to reopen on step 3 with the previous lead still filled in — and saving it again
+  // created a copy (one walk-in was saved three times this way).
+  useEffectF(() => {
+    if (open) { setForm(blankLead()); setStep(1); setErrors({}); setDupeOk(false); setSaving(false); }
+  }, [open]);
 
-  const validate = () => {
-    const e = {};
-    if (!form.name.trim()) e.name = "Required";
-    if (!form.phone.trim()) e.phone = "Required";
-    else if (form.phone.replace(/\D/g, "").length < 10) e.phone = "Enter a valid phone";
+  const patch = (o) => setForm(f => ({ ...f, ...o }));
+  const update = (k, v) => patch({ [k]: v });
+  const dupes = window.leadsWithPhone(form.phone);
+  const dirty = !!(form.name || form.phone || form.email || form.notes);
+
+  const validateStep1 = () => {
+    const e = window.validateLeadContact(form, { dupes, dupeOk });
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
-  const handleSave = () => {
-    if (!validate()) return;
-    onSave && onSave(form);
+  const requestClose = () => {
+    if (saving) return;
+    if (dirty && !window.confirm("Discard this lead? What you've typed will be lost.")) return;
     onClose();
+  };
+
+  const handleSave = async () => {
+    if (!validateStep1()) { setStep(1); return; }
+    const be = window.budgetError(form.budget);
+    if (be) { setErrors({ budget: be }); setStep(2); return; }
+    setSaving(true);
+    const ok = onSave ? await onSave({ ...form, allowDuplicate: dupes.length && dupeOk ? 1 : 0 }) : true;
+    setSaving(false);
+    if (ok) { onClose(); return; }
+    // on failure the form stays open, still filled in; if the refresh revealed a matching
+    // phone, take the rep straight to the warning
+    if (window.leadsWithPhone(form.phone).length && !dupeOk) { setStep(1); setErrors({ dupe: "Confirm this is a different person" }); }
   };
 
   const StepDot = ({ n, label, active, done }) => (
@@ -158,18 +470,28 @@ window.NewLeadModal = function NewLeadModal({ open, onClose, onSave }) {
     </div>
   );
 
+  const partner = (data.channelPartners || []).find(c => c.id === form.channelPartner);
+  const sourceLine = form.source
+    ? form.source + (partner ? " · " + partner.name : "") + (form.source === SOURCE_REFERENCE && form.referredBy ? " · referred by " + form.referredBy : "")
+    : "—";
+  const projectName = (data.projects.find(p => p.id === form.project) || {}).name;
+
   return (
-    <Modal open={open} onClose={onClose}
+    <Modal open={open} onClose={requestClose}
       eyebrow="ADD A NEW LEAD"
       title={form.name ? `New lead: ${form.name}` : "Capture a new lead"}
-      subtitle="Fill in what you have — you can complete the rest later."
+      subtitle="Fill in what you have — you can complete the rest later from the lead's Edit details."
       width={780}
       footer={<>
-        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        {step > 1 && <Btn variant="outline" size="sm" onClick={() => setStep(step - 1)}>Back</Btn>}
+        <Btn variant="ghost" size="sm" onClick={requestClose} disabled={saving}>Cancel</Btn>
+        {step > 1 && <Btn variant="outline" size="sm" onClick={() => setStep(step - 1)} disabled={saving}>Back</Btn>}
         {step < 3 && <Btn variant="primary" size="sm" icon="arrowR"
-          onClick={() => { if (step === 1 && !validate()) return; setStep(step + 1); }}>Continue</Btn>}
-        {step === 3 && <Btn variant="accent" size="sm" icon="check" onClick={handleSave}>Save lead</Btn>}
+          onClick={() => {
+            if (step === 1 && !validateStep1()) return;
+            if (step === 2) { const be = window.budgetError(form.budget); setErrors(be ? { budget: be } : {}); if (be) return; }
+            setStep(step + 1);
+          }}>Continue</Btn>}
+        {step === 3 && <Btn variant="accent" size="sm" icon="check" onClick={handleSave} disabled={saving}>{saving ? "Saving…" : "Save lead"}</Btn>}
       </>}>
       <div style={{ display: "flex", gap: 24, marginBottom: 24, paddingBottom: 16, borderBottom: "1px dashed var(--hairline)" }}>
         <StepDot n={1} label="Contact" active={step === 1} done={step > 1} />
@@ -185,30 +507,19 @@ window.NewLeadModal = function NewLeadModal({ open, onClose, onSave }) {
             <Input placeholder="e.g. Rajesh Khandelwal" value={form.name} onChange={(e) => update("name", e.target.value)} />
           </Field>
           <Field label="Phone" required error={errors.phone}>
-            <Input placeholder="+91 98220 41782" value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+            <Input placeholder="10-digit mobile number" value={form.phone} onChange={(e) => { update("phone", e.target.value); setDupeOk(false); }} />
           </Field>
-          <Field label="Email">
+          <Field label="Email" error={errors.email}>
             <Input type="email" placeholder="name@email.com" value={form.email} onChange={(e) => update("email", e.target.value)} />
           </Field>
+          <DuplicatePhoneWarning dupes={dupes} ok={dupeOk} onOk={setDupeOk} error={!!errors.dupe} />
+          <LeadSourceFields form={form} patch={patch} errors={errors} />
           <Field label="Occupation">
             <Input placeholder="e.g. Chartered Accountant" value={form.occupation} onChange={(e) => update("occupation", e.target.value)} />
           </Field>
           <Field label="City">
             <Input value={form.city} onChange={(e) => update("city", e.target.value)} />
           </Field>
-          <Field label="Source" span={2}>
-            <Select value={form.source} onChange={(e) => update("source", e.target.value)}>
-              {data.sources.map(s => <option key={s} value={s}>{s}</option>)}
-            </Select>
-          </Field>
-          {form.source === "Channel Partner" && (
-            <Field label="Channel partner" span={2}>
-              <Select value={form.channelPartner} onChange={(e) => update("channelPartner", e.target.value)}>
-                <option value="">— Select partner —</option>
-                {data.channelPartners.map(cp => <option key={cp.id} value={cp.id}>{cp.name} ({cp.contact})</option>)}
-              </Select>
-            </Field>
-          )}
         </div>
       )}
 
@@ -216,16 +527,19 @@ window.NewLeadModal = function NewLeadModal({ open, onClose, onSave }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <Field label="Project of interest" span={2}>
             <Select value={form.project} onChange={(e) => update("project", e.target.value)}>
-              {data.projects.map(p => <option key={p.id} value={p.id}>{p.name} — {p.locality}, {p.city}</option>)}
+              <option value="">— Not decided yet —</option>
+              {data.projects.map(p => <option key={p.id} value={p.id}>{[p.name, p.locality, p.city].filter(Boolean).join(" — ")}</option>)}
             </Select>
           </Field>
           <Field label="Configuration">
             <Select value={form.interest} onChange={(e) => update("interest", e.target.value)}>
-              {["1 BHK", "2 BHK", "3 BHK", "4 BHK", "Row House", "Office Suite", "Retail Shop"].map(t => <option key={t}>{t}</option>)}
+              <option value="">— Not known yet —</option>
+              {LEAD_CONFIGS.map(t => <option key={t}>{t}</option>)}
             </Select>
           </Field>
-          <Field label="Budget (₹)" hint="Approx. — used for unit recommendations">
-            <Input type="text" placeholder="e.g. 7500000" value={form.budget} onChange={(e) => update("budget", e.target.value)} />
+          <Field label="Budget (₹)" error={errors.budget}
+            hint={window.parseBudget(form.budget) > 0 ? "= " + fmtINR(window.parseBudget(form.budget)) : "Approx. — e.g. 7500000, 75 L or 1.3 Cr"}>
+            <Input type="text" placeholder="e.g. 75 L" value={form.budget} onChange={(e) => { update("budget", e.target.value); setErrors(er => ({ ...er, budget: undefined })); }} />
           </Field>
           <Field label="Initial notes" span={2} hint="Anything from the first conversation">
             <Textarea placeholder="Looking for east-facing 3 BHK, ready to visit this weekend…" rows={4}
@@ -267,8 +581,8 @@ window.NewLeadModal = function NewLeadModal({ open, onClose, onSave }) {
             <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "6px 14px", fontSize: 13 }}>
               <span style={{ color: "var(--neutral-600)" }}>Lead</span><strong>{form.name || "—"}</strong>
               <span style={{ color: "var(--neutral-600)" }}>Phone</span><strong>{form.phone || "—"}</strong>
-              <span style={{ color: "var(--neutral-600)" }}>Source</span><strong>{form.source}{form.channelPartner ? " · " + (data.channelPartners.find(c => c.id === form.channelPartner)?.name) : ""}</strong>
-              <span style={{ color: "var(--neutral-600)" }}>Interest</span><strong>{form.interest} at {data.projects.find(p => p.id === form.project)?.name}</strong>
+              <span style={{ color: "var(--neutral-600)" }}>Source</span><strong>{sourceLine}</strong>
+              <span style={{ color: "var(--neutral-600)" }}>Interest</span><strong>{[form.interest, projectName].filter(Boolean).join(" at ") || "—"}</strong>
               <span style={{ color: "var(--neutral-600)" }}>Entered by</span><strong>{(data.currentUser && data.currentUser.name) || "You"}</strong>
             </div>
             <div style={{ marginTop: 12, fontSize: 12, color: "var(--neutral-600)", display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -283,30 +597,39 @@ window.NewLeadModal = function NewLeadModal({ open, onClose, onSave }) {
 };
 
 // ---------- New Project modal ----------
+// Kept mounted between uses, so it must reset on open — the next project used to inherit
+// the previous one's code, name and prices.
+const blankProject = () => ({ code: "", name: "", type: "Residential", city: "Nagpur",
+  locality: "", typology: "", possession: "", priceFrom: "", priceTo: "", towers: "" });
+
 window.CreateProjectModal = function CreateProjectModal({ open, onClose, onSaved }) {
-  const [form, setForm] = useStateF({ code: "", name: "", type: "Residential", city: "Nagpur",
-    locality: "", typology: "2 & 3 BHK Flats", possession: "", priceFrom: "", priceTo: "", towers: "" });
+  const [form, setForm] = useStateF(blankProject);
   const [err, setErr] = useStateF({});
-  const u = (k, v) => setForm({ ...form, [k]: v });
+  const [busy, setBusy] = useStateF(false);
+  useEffectF(() => { if (open) { setForm(blankProject()); setErr({}); setBusy(false); } }, [open]);
+  const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const save = async () => {
+    if (busy) return;
     const e = {};
     if (!form.code.trim()) e.code = "Required";
     if (!form.name.trim()) e.name = "Required";
     setErr(e);
     if (Object.keys(e).length) return;
+    setBusy(true);
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.create_project", args: { payload: form } });
-      frappe.show_alert({ message: "Project " + r.message.code + " created", indicator: "green" });
-      onSaved && await onSaved(r.message);
+      frappe.show_alert({ message: "Project " + esc(r.message.code) + " created", indicator: "green" });
       onClose();
-    } catch (ex) { frappe.msgprint(ex.message || "Could not create project"); }
+      onSaved && await onSaved(r.message);
+    } catch (ex) { /* frappe.call already showed the server's message */ }
+    finally { setBusy(false); }
   };
   return (
     <Modal open={open} onClose={onClose} eyebrow="NEW PROJECT" title="Add a project"
       subtitle="Create the project, then add its inventory." width={720}
       footer={<>
-        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="check" onClick={save}>Create project</Btn>
+        <Btn variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Creating…" : "Create project"}</Btn>
       </>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Field label="Project code" required error={err.code} hint="Short code, e.g. AN, SP">
@@ -333,17 +656,24 @@ window.CreateProjectModal = function CreateProjectModal({ open, onClose, onSaved
 };
 
 // ---------- Add Units (inventory) modal — uniform OR granular per-floor ----------
-const UNIT_TYPOLOGIES = ["1 BHK", "2 BHK", "3 BHK", "4 BHK", "Penthouse", "Row House", "Office Suite", "Retail Shop"];
+const UNIT_TYPOLOGIES = ["1 BHK", "2 BHK", "3 BHK", "4 BHK", "Penthouse", "Row House", "Office Suite", "Office", "Retail Shop", "Shop", "Showroom"];
 const UNIT_FACINGS = ["", "East", "West", "North", "South"];
 const cellInput = { padding: "7px 8px", borderRadius: 6, border: "1px solid var(--hairline)", fontSize: 12, fontFamily: "var(--font-body)", background: "var(--bg)", color: "var(--neutral-900)", outline: "none", width: "100%" };
-const newRow = () => ({ typology: "2 BHK", carpet: "", price: "", facing: "", count: "1" });
+const newRow = () => ({ typology: "", carpet: "", price: "", facing: "", count: "1" });
 
 window.AddUnitsModal = function AddUnitsModal({ open, onClose, project, onSaved }) {
-  const initForm = () => ({ tower: "A", floors: "4", unitsPerFloor: "4", typology: "2 BHK", carpet: "720", price: "5200000" });
+  // The project's existing towers ("" = a single building with no tower). Pre-fill the only
+  // one, so floors added to a real towerless building join it instead of a new "Tower A".
+  const existingTowers = Object.keys(((window.CRM_DATA || {}).grids || {})[project] || {});
+  // Nothing is pre-filled with invented figures: a blank price/carpet/facing/typology stays
+  // blank (this form used to default to ₹52 L and 720 sq ft, which reps then quoted).
+  const initForm = () => ({ tower: existingTowers.length === 1 ? existingTowers[0] : "", startFloor: "1",
+    floors: "1", unitsPerFloor: "1", typology: "", carpet: "", price: "", facing: "" });
   const [form, setForm] = useStateF(initForm);
   const [granular, setGranular] = useStateF(false);
   const [bands, setBands] = useStateF([]);
-  useEffectF(() => { if (open) { setForm(initForm()); setGranular(false); setBands([]); } }, [open]);
+  const [busy, setBusy] = useStateF(false);
+  useEffectF(() => { if (open) { setForm(initForm()); setGranular(false); setBands([]); setBusy(false); } }, [open]);
   const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const code = (project || "").replace("P-", "");
 
@@ -355,13 +685,16 @@ window.AddUnitsModal = function AddUnitsModal({ open, onClose, project, onSaved 
   const addBand = () => setBands(bs => { const maxTo = bs.reduce((m, b) => Math.max(m, parseInt(b.to) || 0), 0); const f = String(maxTo + 1); return [...bs, { from: f, to: f, rows: [newRow()] }]; });
   const removeBand = (i) => setBands(bs => bs.filter((_, idx) => idx !== i));
   const enableGranular = () => {
-    setBands([{ from: "1", to: form.floors || "1", rows: [{ typology: form.typology, carpet: form.carpet, price: form.price, facing: "", count: form.unitsPerFloor || "1" }] }]);
+    const f0 = parseInt(form.startFloor, 10); const from = Number.isFinite(f0) ? f0 : 1;
+    setBands([{ from: String(from), to: String(from + (parseInt(form.floors, 10) || 1) - 1), rows: [{ typology: form.typology, carpet: form.carpet, price: form.price, facing: form.facing, count: form.unitsPerFloor || "1" }] }]);
     setGranular(true);
   };
 
   // --- math + validation ---
   const perFloor = (b) => b.rows.reduce((s, r) => s + (parseInt(r.count) || 0), 0);
-  const bandFloors = (b) => { const f = parseInt(b.from) || 0, t = parseInt(b.to) || 0; return f && t && t >= f ? (t - f + 1) : 0; };
+  // floor 0 (ground) and -1/-2 (basements) are real floors here — "f && t" treated 0 as missing
+  const num = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : null; };
+  const bandFloors = (b) => { const f = num(b.from), t = num(b.to); return f !== null && t !== null && t >= f ? (t - f + 1) : 0; };
   const bandTotal = (b) => perFloor(b) * bandFloors(b);
   const uniformTotal = (parseInt(form.floors) || 0) * (parseInt(form.unitsPerFloor) || 0);
   const grandTotal = granular ? bands.reduce((s, b) => s + bandTotal(b), 0) : uniformTotal;
@@ -370,64 +703,79 @@ window.AddUnitsModal = function AddUnitsModal({ open, onClose, project, onSaved 
   if (granular) {
     const seen = {};
     bands.forEach((b, i) => {
-      const f = parseInt(b.from) || 0, t = parseInt(b.to) || 0;
-      if (f < 1) errors.push(`Band ${i + 1}: from-floor must be 1 or more`);
+      const f = num(b.from), t = num(b.to);
+      if (f === null || t === null) errors.push(`Band ${i + 1}: enter both floors`);
+      else if (f < -2) errors.push(`Band ${i + 1}: floors start at -2 (basement); 0 is ground`);
       else if (t < f) errors.push(`Band ${i + 1}: to-floor must be ≥ from-floor`);
       else { for (let fl = f; fl <= t; fl++) { if (seen[fl] != null) errors.push(`Floor ${fl} is in more than one band`); seen[fl] = i; } }
       if (perFloor(b) > 99) errors.push(`Band ${i + 1}: more than 99 units per floor`);
     });
     if (grandTotal === 0) errors.push("Add at least one unit");
   }
-  const canSave = granular ? errors.length === 0 && grandTotal > 0 : uniformTotal > 0;
+  const uStart = num(form.startFloor);
+  if (!granular && (uStart === null || uStart < -2)) errors.push("Starting floor must be -2 or higher (0 = Ground, -1 = Basement)");
+  const canSave = granular ? errors.length === 0 && grandTotal > 0 : errors.length === 0 && uniformTotal > 0;
 
   const save = async () => {
-    if (!canSave) return;
+    if (!canSave || busy) return;
     let payload;
     if (granular && grandTotal > 0) {
       payload = {
         project, tower: form.tower,
-        carpetDefault: form.carpet, priceDefault: form.price,
+        typologyDefault: form.typology, carpetDefault: form.carpet, priceDefault: form.price,
         bands: bands.map(b => ({
-          from: parseInt(b.from) || 0, to: parseInt(b.to) || 0,
+          from: num(b.from), to: num(b.to),
           rows: b.rows.filter(r => (parseInt(r.count) || 0) > 0).map(r => ({
-            typology: r.typology, carpet: r.carpet, price: r.price, facing: r.facing, count: parseInt(r.count) || 1,
+            typology: r.typology || form.typology, carpet: r.carpet, price: r.price, facing: r.facing, count: parseInt(r.count) || 1,
           })),
         })),
       };
     } else {
       payload = { ...form, project };  // legacy uniform path
     }
+    setBusy(true);
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.add_units", args: { payload } });
-      const msg = r.message.created + " units added to " + code + (r.message.skipped ? " (" + r.message.skipped + " already existed)" : "");
-      frappe.show_alert({ message: msg, indicator: "green" });
-      onSaved && await onSaved(r.message);
+      const msg = r.message.created + " units added to " + esc(code) + (r.message.skipped ? " (" + r.message.skipped + " already existed — skipped)" : "");
+      frappe.show_alert({ message: msg, indicator: r.message.created ? "green" : "orange" });
       onClose();
-    } catch (ex) { frappe.msgprint(ex.message || "Could not add units"); }
+      onSaved && await onSaved(r.message);
+    } catch (ex) { /* frappe.call already showed the server's message */ }
+    finally { setBusy(false); }
   };
 
   return (
     <Modal open={open} onClose={onClose} eyebrow="ADD INVENTORY" title={"Add units to " + code}
       subtitle="Set a uniform tower, or a per-floor mix for varied layouts." width={720}
       footer={<>
-        <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="plus" onClick={save}
-          style={{ opacity: canSave ? 1 : 0.5, pointerEvents: canSave ? "auto" : "none" }}>
-          Add {grandTotal} unit{grandTotal === 1 ? "" : "s"}
+        <Btn variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancel</Btn>
+        <Btn variant="accent" size="sm" icon="plus" onClick={save} disabled={!canSave || busy}>
+          {busy ? "Adding…" : "Add " + grandTotal + " unit" + (grandTotal === 1 ? "" : "s")}
         </Btn>
       </>}>
       {/* Tower-wide defaults (uniform mode = the whole submission) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Field label="Tower" hint="A single letter or code"><Input value={form.tower} onChange={(e) => u("tower", e.target.value.toUpperCase())} /></Field>
+        <Field label="Tower" hint={existingTowers.length
+            ? "Existing: " + existingTowers.map(t => t || "no tower").join(", ") + " — leave blank for a single building"
+            : "Leave blank for a single building with no towers"}>
+          <Input value={form.tower} placeholder="(no tower)" onChange={(e) => u("tower", e.target.value.toUpperCase())} />
+        </Field>
         <Field label={granular ? "Default typology" : "Typology"}>
           <Select value={form.typology} onChange={(e) => u("typology", e.target.value)}>
+            <option value="">— Not set —</option>
             {UNIT_TYPOLOGIES.map(t => <option key={t}>{t}</option>)}
           </Select>
         </Field>
+        {!granular && <Field label="Starting floor" hint="0 = Ground, -1 = Basement"><Input type="number" min="-2" value={form.startFloor} onChange={(e) => u("startFloor", e.target.value)} /></Field>}
         {!granular && <Field label="Floors"><Input type="number" min="1" value={form.floors} onChange={(e) => u("floors", e.target.value)} /></Field>}
         {!granular && <Field label="Units per floor"><Input type="number" min="1" value={form.unitsPerFloor} onChange={(e) => u("unitsPerFloor", e.target.value)} /></Field>}
-        <Field label={granular ? "Default carpet (sqft)" : "Carpet area (sqft)"}><Input type="number" value={form.carpet} onChange={(e) => u("carpet", e.target.value)} /></Field>
-        <Field label={granular ? "Default price (₹)" : "Price (₹)"}><Input type="number" value={form.price} onChange={(e) => u("price", e.target.value)} /></Field>
+        {!granular && <Field label="Facing">
+          <Select value={form.facing} onChange={(e) => u("facing", e.target.value)}>
+            {UNIT_FACINGS.map(fc => <option key={fc} value={fc}>{fc || "— Not set —"}</option>)}
+          </Select>
+        </Field>}
+        <Field label={granular ? "Default carpet (sqft)" : "Carpet area (sqft)"}><Input type="number" placeholder="Not set" value={form.carpet} onChange={(e) => u("carpet", e.target.value)} /></Field>
+        <Field label={granular ? "Default price (₹)" : "Price (₹)"} hint="Leave blank if not priced yet"><Input type="number" placeholder="Not set" value={form.price} onChange={(e) => u("price", e.target.value)} /></Field>
       </div>
 
       {/* Progressive disclosure toggle */}
@@ -450,9 +798,9 @@ window.AddUnitsModal = function AddUnitsModal({ open, onClose, project, onSaved 
             <div key={bi} style={{ border: "1px solid var(--hairline)", borderRadius: 12, overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: "var(--neutral-50)", borderBottom: "1px solid var(--hairline)" }}>
                 <span style={{ ...drawerEyebrow }}>Floors</span>
-                <input type="number" min="1" value={b.from} onChange={(e) => setBand(bi, { from: e.target.value })} style={{ ...cellInput, width: 64 }} />
+                <input type="number" min="-2" value={b.from} onChange={(e) => setBand(bi, { from: e.target.value })} style={{ ...cellInput, width: 64 }} />
                 <span style={{ color: "var(--neutral-400)" }}>–</span>
-                <input type="number" min="1" value={b.to} onChange={(e) => setBand(bi, { to: e.target.value })} style={{ ...cellInput, width: 64 }} />
+                <input type="number" min="-2" value={b.to} onChange={(e) => setBand(bi, { to: e.target.value })} style={{ ...cellInput, width: 64 }} />
                 <span style={{ fontSize: 11, color: "var(--neutral-500)" }}>
                   {bandFloors(b) === 1 ? "Single floor (penthouse / amenity)" : bandFloors(b) > 1 ? `${bandFloors(b)} floors` : "—"}
                 </span>
@@ -469,12 +817,13 @@ window.AddUnitsModal = function AddUnitsModal({ open, onClose, project, onSaved 
                 {b.rows.map((r, ri) => (
                   <div key={ri} style={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 1.1fr 1fr 0.7fr 28px", gap: 8, marginBottom: 8, alignItems: "center" }}>
                     <select value={r.typology} onChange={(e) => setRow(bi, ri, { typology: e.target.value })} style={{ ...cellInput, cursor: "pointer" }}>
+                      <option value="">{form.typology || "— Not set —"}</option>
                       {UNIT_TYPOLOGIES.map(t => <option key={t}>{t}</option>)}
                     </select>
-                    <input type="number" placeholder={form.carpet || "720"} value={r.carpet} onChange={(e) => setRow(bi, ri, { carpet: e.target.value })} style={cellInput} />
+                    <input type="number" placeholder={form.carpet || "—"} value={r.carpet} onChange={(e) => setRow(bi, ri, { carpet: e.target.value })} style={cellInput} />
                     <input type="number" placeholder={form.price || "—"} value={r.price} onChange={(e) => setRow(bi, ri, { price: e.target.value })} style={cellInput} />
                     <select value={r.facing} onChange={(e) => setRow(bi, ri, { facing: e.target.value })} style={{ ...cellInput, cursor: "pointer" }}>
-                      {UNIT_FACINGS.map(fc => <option key={fc} value={fc}>{fc || "Auto"}</option>)}
+                      {UNIT_FACINGS.map(fc => <option key={fc} value={fc}>{fc || "Not set"}</option>)}
                     </select>
                     <input type="number" min="1" value={r.count} onChange={(e) => setRow(bi, ri, { count: e.target.value })} style={cellInput} />
                     {b.rows.length > 1
@@ -496,7 +845,7 @@ window.AddUnitsModal = function AddUnitsModal({ open, onClose, project, onSaved 
       <div style={{ marginTop: 16, padding: 12, background: errors.length ? "var(--error-bg)" : "var(--neutral-50)", borderRadius: 10, fontSize: 13, color: errors.length ? "var(--error)" : "var(--neutral-600)" }}>
         {errors.length
           ? errors[0]
-          : <>Generates <strong style={{ color: "var(--neutral-800)" }}>{grandTotal}</strong> available unit{grandTotal === 1 ? "" : "s"} in Tower {form.tower || "?"}{!granular && <> ({form.floors} floors × {form.unitsPerFloor} per floor)</>}.</>}
+          : <>Generates <strong style={{ color: "var(--neutral-800)" }}>{grandTotal}</strong> available unit{grandTotal === 1 ? "" : "s"} in {form.tower ? "Tower " + form.tower : "the building (no tower)"}{!granular && <> ({form.floors} floor{form.floors === "1" ? "" : "s"} from {floorLabel(uStart || 0)} × {form.unitsPerFloor} per floor)</>}. Units that already exist are skipped.</>}
       </div>
     </Modal>
   );
@@ -546,7 +895,7 @@ window.EmailAccountModal = function EmailAccountModal({ open, onClose, account, 
       subtitle="Emails to leads are sent from this address (SMTP). For Gmail, use an App Password." width={600}
       footer={<>
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Saving…" : "Save"}</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Btn>
       </>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Field label="Email address" required><Input type="email" autoFocus placeholder="you@gmail.com" value={form.email} onChange={(e) => u("email", e.target.value)} /></Field>
@@ -638,6 +987,7 @@ const REP_LOGIN_ROLES = [
 ];
 window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
   const init = () => ({ full_name: "", role: "Sales Executive", phone: "", email: "", createLogin: false, frappeRole: "Realty Sales Executive" });
+  const canLogin = !!(window.CRM_DATA && window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.canManageUsers);
   const [form, setForm] = useStateF(init);
   const [busy, setBusy] = useStateF(false);
   useEffectF(() => { if (open) { setForm(init()); setBusy(false); } }, [open]);
@@ -645,10 +995,10 @@ window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
   if (!open) return null;
   const save = async () => {
     if (!form.full_name.trim()) { frappe.msgprint("Name is required."); return; }
-    if (form.createLogin && !form.email.trim()) { frappe.msgprint("An email is required to create a login."); return; }
+    if (canLogin && form.createLogin && !form.email.trim()) { frappe.msgprint("An email is required to create a login."); return; }
     setBusy(true);
     try {
-      const r = await frappe.call({ method: "dux_crm_realty.api.crm.create_rep", args: { payload: form } });
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.create_rep", args: { payload: { ...form, createLogin: canLogin && form.createLogin } } });
       frappe.show_alert({ message: esc(form.full_name) + " added" + (r.message.login ? " · login " + esc(r.message.login) : ""), indicator: "green" });
       onSaved && await onSaved();
       onClose();
@@ -660,7 +1010,7 @@ window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
       width={600}
       footer={<>
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Adding…" : "Add member"}</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Adding…" : "Add member"}</Btn>
       </>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Field label="Full name" required span={2}><Input autoFocus placeholder="e.g. Anita Kulkarni" value={form.full_name} onChange={(e) => u("full_name", e.target.value)} /></Field>
@@ -671,7 +1021,10 @@ window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
         </Field>
         <Field label="Phone"><Input placeholder="+91…" value={form.phone} onChange={(e) => u("phone", e.target.value)} /></Field>
         <Field label="Email" span={2} hint="Used as the ERPNext login id, if you create one"><Input type="email" placeholder="name@shradha.in" value={form.email} onChange={(e) => u("email", e.target.value)} /></Field>
-        <div style={{ gridColumn: "span 2", padding: 14, border: "1px solid var(--hairline)", borderRadius: 10, background: "var(--neutral-50)" }}>
+        {/* creating a login is a user-admin action server-side: a Sales Manager was offered it
+            and then refused */}
+        {!canLogin && <div style={{ gridColumn: "span 2", fontSize: 12, color: "var(--neutral-600)" }}>To give this person a login, ask a CRM admin (Settings → Users &amp; access).</div>}
+        {canLogin && <div style={{ gridColumn: "span 2", padding: 14, border: "1px solid var(--hairline)", borderRadius: 10, background: "var(--neutral-50)" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
             <button onClick={(e) => { e.preventDefault(); u("createLogin", !form.createLogin); }} style={{
               width: 18, height: 18, borderRadius: 5, cursor: "pointer", flexShrink: 0,
@@ -690,11 +1043,11 @@ window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
               </Field>
               <div style={{ fontSize: 11, color: "var(--neutral-500)", marginTop: 8, display: "flex", gap: 6, alignItems: "flex-start" }}>
                 <Icon name="user" size={13} style={{ marginTop: 1, color: "var(--dux-amber-600)" }} />
-                <span>Creates a Frappe/ERPNext User (no password — they set one via “Forgot password”). The login is linked to this rep so their holds and leads are attributed correctly.</span>
+                <span>Creates the login linked to this rep, so their holds and leads are attributed correctly. Then set their password in Settings → Users &amp; access → Set password (this server can't send password emails).</span>
               </div>
             </div>
           )}
-        </div>
+        </div>}
       </div>
     </Modal>
   );
@@ -772,7 +1125,7 @@ window.AddLoginModal = function AddLoginModal({ open, onClose, onSaved }) {
       subtitle="Creates an ERPNext login for this person and registers it with the CRM." width={620}
       footer={<>
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Creating…" : "Create login"}</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Creating…" : "Create login"}</Btn>
       </>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Field label="Full name" required span={2}><Input autoFocus placeholder="e.g. Aniruddha Mahakulkar" value={form.full_name} onChange={(e) => u("full_name", e.target.value)} /></Field>
@@ -820,7 +1173,7 @@ window.SetPasswordModal = function SetPasswordModal({ user, onClose, onSaved }) 
       footer={done
         ? <Btn variant="accent" size="sm" icon="check" onClick={onClose}>Done</Btn>
         : <><Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-            <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Saving…" : "Set password"}</Btn></>}>
+            <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Saving…" : "Set password"}</Btn></>}>
       {done ? (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--neutral-50)" }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -869,7 +1222,7 @@ window.ChangePasswordModal = function ChangePasswordModal({ open, onClose }) {
       footer={done
         ? <Btn variant="accent" size="sm" icon="check" onClick={onClose}>Done</Btn>
         : <><Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-            <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Saving…" : "Change password"}</Btn></>}>
+            <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Saving…" : "Change password"}</Btn></>}>
       {done ? (
         <div style={{ padding: 14, border: "1px solid var(--success)", background: "var(--success-bg)", borderRadius: 10, fontSize: 13, color: "var(--success)" }}>
           Your password has been changed. You stay signed in here; any other devices have been signed out.
@@ -906,7 +1259,10 @@ window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initi
     if (open) {
       setKind(initialKind || "Hold"); setMode("lead"); setLead(""); setContactName("");
       setContactPhone(""); setNote(""); setBusy(false);
-      setRequestedBy((data.currentUser && data.currentUser.name) || ((data.owners || [])[0] || {}).name || "");
+      // "" = the logged-in user themself. Defaulting to a name that is not in the list made
+      // the select DISPLAY the first rep while sending something else.
+      const me = (data.currentUser && data.currentUser.name) || "";
+      setRequestedBy((data.owners || []).some(o => o.name === me) ? me : "");
     }
   }, [open, initialKind]);
   if (!open || !unit) return null;
@@ -945,7 +1301,7 @@ window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initi
       subtitle={"Goes to a manager for approval. " + code + " · " + (unit.typology || "")} width={600}
       footer={<>
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Submitting…" : "Submit request"}</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Submitting…" : "Submit request"}</Btn>
       </>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Field label="What are you requesting?">
@@ -964,11 +1320,18 @@ window.HoldRequestModal = function HoldRequestModal({ open, onClose, unit, initi
             <Field label="Contact phone"><Input placeholder="+91…" value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} /></Field>
           </div>
         )}
-        <Field label="Requested by" hint="Defaults to you; a manager can file on behalf of a rep">
-          <Select value={requestedBy} onChange={(e) => setRequestedBy(e.target.value)}>
-            {(data.owners || []).map(o => <option key={o.id} value={o.name}>{o.name}{o.role ? " · " + o.role : ""}</option>)}
-          </Select>
-        </Field>
+        {/* request_hold only honours "on behalf of" for managers; a rep's choice was silently ignored */}
+        {data.currentUser && data.currentUser.isManager ? (
+          <Field label="Requested by" hint="Defaults to you; as a manager you can file on behalf of a rep">
+            <Select value={requestedBy} onChange={(e) => setRequestedBy(e.target.value)}>
+              {!(data.owners || []).some(o => o.name === ((data.currentUser && data.currentUser.name) || "")) &&
+                <option value="">Me ({(data.currentUser && data.currentUser.name) || "you"})</option>}
+              {(data.owners || []).map(o => <option key={o.id} value={o.name}>{o.name}{o.role ? " · " + o.role : ""}</option>)}
+            </Select>
+          </Field>
+        ) : (
+          <Field label="Requested by"><Input value={(data.currentUser && data.currentUser.name) || "You"} disabled readOnly /></Field>
+        )}
         <Field label="Note" hint="Optional — context for the approver / next person">
           <Textarea rows={2} placeholder="Why this hold, until when, etc." value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
@@ -1001,16 +1364,28 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
   // lead-picker filters (only used when no lead is pre-linked, e.g. from My Day)
   const [leadQuery, setLeadQuery] = useStateF("");
   const [leadProject, setLeadProject] = useStateF("all");
-  useEffectF(() => { if (open) { setForm(init()); setLeadQuery(""); setLeadProject("all"); } }, [open, defaultDate, defaultOwner]);
+  const [busy, setBusy] = useStateF(false);
+  useEffectF(() => { if (open) { setForm(init()); setLeadQuery(""); setLeadProject("all"); setBusy(false); } }, [open, defaultDate, defaultOwner]);
   const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  // no in-flight guard used to mean a double-click (or a click during the ~1 MB refresh
+  // that ran before the modal closed) created the task twice
   const save = async () => {
+    if (busy) return;
     if (!form.title.trim()) { frappe.msgprint("Task title is required."); return; }
+    if (!form.date) { frappe.msgprint("Pick a due date."); return; }   // blank used to save as "today"
+    setBusy(true);
     try {
       await frappe.call({ method: "dux_crm_realty.api.crm.create_task", args: { payload: { ...form, lead: lead ? lead.id : (form.lead || null) } } });
       frappe.show_alert({ message: "Task created", indicator: "green" });
-      onSaved && await onSaved();
       onClose();
-    } catch (e) { frappe.msgprint(e.message || "Could not create task"); }
+      onSaved && await onSaved();
+    } catch (e) { /* frappe.call already showed the server's message */ }
+    finally { setBusy(false); }
+  };
+  const requestClose = () => {
+    if (busy) return;
+    if ((form.title.trim() || form.notes.trim()) && !window.confirm("Discard this task?")) return;
+    onClose();
   };
   if (!open) return null;
   const PRI = [["low", "Low"], ["med", "Medium"], ["high", "High"]];
@@ -1023,7 +1398,7 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
     return true;
   }).slice(0, 6) : [];
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,26,46,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)" }}>
+    <div {...backdropClose(requestClose)} style={{ position: "fixed", inset: 0, background: "rgba(15,26,46,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, backdropFilter: "blur(4px)" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 620, maxWidth: "92%", maxHeight: "92%", display: "flex", flexDirection: "column", background: "var(--bg)", borderRadius: 14, boxShadow: "var(--shadow-xl)", overflow: "hidden" }}>
         <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--hairline)", display: "flex", alignItems: "flex-start", gap: 14 }}>
           <div style={{ flex: 1 }}>
@@ -1031,7 +1406,7 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
             <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700 }}>Create a task</div>
             {lead && <div style={{ fontSize: 13, color: "var(--neutral-600)", marginTop: 4 }}>Linked to {lead.name} · {lead.id}</div>}
           </div>
-          <button onClick={onClose} style={{ ...iconBtn, width: 32, height: 32, border: "1px solid var(--hairline)" }}><Icon name="x" size={16} /></button>
+          <button onClick={requestClose} style={{ ...iconBtn, width: 32, height: 32, border: "1px solid var(--hairline)" }}><Icon name="x" size={16} /></button>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -1042,11 +1417,14 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
               <Select value={form.type} onChange={(e) => u("type", e.target.value)}>{TYPES.map(t => <option key={t}>{t}</option>)}</Select>
             </Field>
             <Field label="Assign to" hint="Managers can assign to anyone">
+              {/* without a blank option the browser DISPLAYED the first rep while the value was
+                  "" — the task was saved unassigned under a form that said "Aniruddha" */}
               <Select value={form.assignedTo} onChange={(e) => u("assignedTo", e.target.value)}>
+                <option value="">— Not assigned —</option>
                 {(data.owners || []).map(o => <option key={o.id} value={o.name}>{o.name} · {o.role}</option>)}
               </Select>
             </Field>
-            <Field label="Due date"><Input type="date" value={form.date} onChange={(e) => u("date", e.target.value)} /></Field>
+            <Field label="Due date" required><Input type="date" value={form.date} onChange={(e) => u("date", e.target.value)} /></Field>
             <Field label="Time"><Input type="time" value={form.time} onChange={(e) => u("time", e.target.value)} /></Field>
             <Field label="Priority" span={2}>
               <div style={{ display: "flex", gap: 8 }}>
@@ -1104,8 +1482,8 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
           </div>
         </div>
         <div style={{ padding: "16px 24px", borderTop: "1px solid var(--hairline)", background: "var(--neutral-50)", display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-          <Btn variant="accent" size="sm" icon="check" onClick={save}>Create task</Btn>
+          <Btn variant="ghost" size="sm" onClick={requestClose} disabled={busy}>Cancel</Btn>
+          <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Creating…" : "Create task"}</Btn>
         </div>
       </div>
     </div>
@@ -1113,8 +1491,13 @@ window.TaskModal = function TaskModal({ open, onClose, lead, defaultDate, defaul
 };
 
 // ---------- DMS: multipart upload helper (fetch + CSRF; frappe.call is JSON-only) ----------
+window.MAX_UPLOAD_MB = 24;
 window.__uploadDocument = async (file, { title, project, unit, lead, booking, category, tags, shareable }) => {
   if (!frappe.csrf_token) { frappe.msgprint("Session expired — please reload the page."); return null; }
+  // say so BEFORE sending the whole file, not after
+  if (file && file.size > window.MAX_UPLOAD_MB * 1024 * 1024) {
+    frappe.msgprint("That file is " + (file.size / 1048576).toFixed(1) + " MB — the limit is " + window.MAX_UPLOAD_MB + " MB."); return null;
+  }
   const fd = new FormData();
   fd.append("file", file);
   if (title) fd.append("title", title);
@@ -1139,9 +1522,10 @@ window.__uploadDocument = async (file, { title, project, unit, lead, booking, ca
     } catch (e) {}
     frappe.msgprint(msg); return null;
   }
+  const out = await res.json();
   frappe.show_alert({ message: "Document uploaded", indicator: "green" });
-  if (window.__refreshCRM) await window.__refreshCRM();
-  return await res.json();
+  try { if (window.__refreshCRM) await window.__refreshCRM(); } catch (e) { /* uploaded either way */ }
+  return out;
 };
 
 // ---------- DMS: upload-document modal (scope can be pre-filled by the caller) ----------
@@ -1162,12 +1546,13 @@ window.UploadDocumentModal = function UploadDocumentModal({ open, onClose, onSav
     if (!file) { frappe.msgprint("Choose a file to upload."); return; }
     if (!form.project) { frappe.msgprint("Pick a project."); return; }
     setBusy(true);
-    const r = await window.__uploadDocument(file, {
-      title: form.title.trim() || file.name, project: form.project,
-      unit: unit || null, lead: form.lead || null, booking: booking || null,
-      category: form.category, tags: form.tags, shareable: form.shareable });
-    setBusy(false);
-    if (r) { onSaved && await onSaved(r.message || r); onClose(); }
+    try {
+      const r = await window.__uploadDocument(file, {
+        title: form.title.trim() || file.name, project: form.project,
+        unit: unit || null, lead: form.lead || null, booking: booking || null,
+        category: form.category, tags: form.tags, shareable: form.shareable });
+      if (r) { onClose(); onSaved && await onSaved(r.message || r); }
+    } finally { setBusy(false); }
   };
   const proj = (data.projects || []).find(p => p.id === form.project);
   return (
@@ -1176,7 +1561,7 @@ window.UploadDocumentModal = function UploadDocumentModal({ open, onClose, onSav
       width={640}
       footer={<>
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="upload" onClick={save}>{busy ? "Uploading…" : "Upload"}</Btn>
+        <Btn variant="accent" size="sm" icon="upload" onClick={save} disabled={busy}>{busy ? "Uploading…" : "Upload"}</Btn>
       </>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         {/* NOT wrapped in <Field> — Field renders a <label>, and a <label> containing a file
@@ -1194,7 +1579,7 @@ window.UploadDocumentModal = function UploadDocumentModal({ open, onClose, onSav
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "var(--neutral-800)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {file ? file.name : "Click to choose a file"}</div>
-              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{file ? (Math.max(1, Math.round(file.size / 1024)) + " KB") : "PDF, image, Office docs · max 25 MB"}</div>
+              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{file ? (Math.max(1, Math.round(file.size / 1024)) + " KB") : "PDF, image, Office docs · max " + window.MAX_UPLOAD_MB + " MB"}</div>
             </div>
             {file && <button onClick={(e) => { e.stopPropagation(); setFile(null); }} title="Remove" style={{ ...iconBtn, width: 28, height: 28 }}><Icon name="x" size={14} /></button>}
           </div>
@@ -1278,7 +1663,7 @@ window.RequestShareModal = function RequestShareModal({ open, onClose, doc, onSa
       subtitle="Goes to a manager for approval. The link only goes live once approved." width={580}
       footer={<>
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Submitting…" : "Request share"}</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Submitting…" : "Request share"}</Btn>
       </>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Field label="Share with (lead)"><LeadPicker value={lead} onChange={setLead} defaultProject={doc.project} /></Field>
@@ -1297,8 +1682,8 @@ window.EditDocumentModal = function EditDocumentModal({ open, onClose, doc, onSa
   const [form, setForm] = useStateF({ title: "", category: "Other", tags: "", shareable: false });
   const [busy, setBusy] = useStateF(false);
   useEffectF(() => {
-    if (open && doc) setForm({ title: doc.title || "", category: doc.category || "Other",
-      tags: (doc.tags || []).join(", "), shareable: !!doc.shareable });
+    if (open && doc) { setForm({ title: doc.title || "", category: doc.category || "Other",
+      tags: (doc.tags || []).join(", "), shareable: !!doc.shareable }); setBusy(false); }
   }, [open, doc]);
   const u = (k, v) => setForm(f => ({ ...f, [k]: v }));
   if (!open || !doc) return null;
@@ -1332,7 +1717,7 @@ window.EditDocumentModal = function EditDocumentModal({ open, onClose, doc, onSa
       footer={<>
         {isManager && <Btn variant="ghost" size="sm" icon="x" onClick={del} style={{ color: "var(--error)", marginRight: "auto" }}>Delete</Btn>}
         <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-        <Btn variant="accent" size="sm" icon="check" onClick={save}>{busy ? "Saving…" : "Save changes"}</Btn>
+        <Btn variant="accent" size="sm" icon="check" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save changes"}</Btn>
       </>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Field label="Title" required span={2} hint="This is the display name (also the downloaded file name)">

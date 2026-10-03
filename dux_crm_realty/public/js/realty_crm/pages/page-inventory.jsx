@@ -93,13 +93,30 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
   const projectDocs = (data.documentsByProject || {})[activeProject] || [];
 
   // Direct status change (legacy Blocked/Reserved release, Mark sold, unwind sale).
-  const applyStatus = async (unit, target, keepOpen) => {
+  const applyStatus = async (unit, target, keepOpen, extra) => {
     try {
-      const r = await frappe.call({ method: "dux_crm_realty.api.crm.set_unit_status", args: { unit_id: unit.id, status: target } });
-      frappe.show_alert({ message: "Unit " + unit.id + " is now " + r.message.status, indicator: target === "Sold" ? "green" : target === "Available" ? "blue" : "orange" });
+      const r = await frappe.call({ method: "dux_crm_realty.api.crm.set_unit_status", args: { unit_id: unit.id, status: target, ...(extra || {}) } });
+      frappe.show_alert({ message: "Unit " + esc(unitLabel(unit)) + " is now " + esc(r.message.status), indicator: target === "Sold" ? "green" : target === "Available" ? "blue" : "orange" });
       if (!keepOpen) setSelectedUnit(null);
       if (window.__refreshCRM) await window.__refreshCRM();
-    } catch (e) { frappe.msgprint(e.message || "Could not update unit"); }
+    } catch (e) { /* frappe.call already showed the server's message */ }
+  };
+  // "Mark sold" must record WHO bought it (it used to leave a sold unit with no buyer
+  // anywhere): the approved hold's lead / contact, or ask.
+  const markSold = (unit) => {
+    const approved = (unit.holds || []).find(h => h.status === "Approved");
+    const buyer = approved && (approved.leadName || approved.contactName);
+    if (buyer) {
+      frappe.confirm("Mark " + esc(unitLabel(unit)) + " as sold to <b>" + esc(buyer) + "</b>?", () => applyStatus(unit, "Sold", true));
+      return;
+    }
+    frappe.prompt([
+      { fieldname: "lead", fieldtype: "Link", options: "Realty Lead", label: "Buyer — an existing lead" },
+      { fieldname: "buyer", fieldtype: "Data", label: "…or the buyer's name (not a lead)" },
+    ], (v) => {
+      if (!v.lead && !(v.buyer || "").trim()) { frappe.msgprint("Pick the buyer's lead or type their name."); return; }
+      applyStatus(unit, "Sold", true, { lead: v.lead || null, buyer: v.buyer || null });
+    }, "Who bought " + unitLabel(unit) + "?", "Mark sold");
   };
   // Hold workflow actions (request/approve/reject/release). Panel stays open and
   // re-resolves from the refreshed grid so the actor sees the new state.
@@ -229,7 +246,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
                   <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: "var(--neutral-100)", color: "var(--neutral-700)" }}>{(h.kind || "Hold").toUpperCase()}</span>
                   <LeadTag hold={h} />
                   <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--neutral-600)" }}>
-                    by <strong style={{ color: "var(--neutral-800)" }}>{h.requestedBy || "—"}</strong>{h.requestedByRole ? " · " + h.requestedByRole : ""}
+                    by <strong style={{ color: "var(--neutral-800)" }}>{h.requestedBy || h.filedBy || "—"}</strong>{h.requestedByRole ? " · " + h.requestedByRole : ""}
                   </div>
                   <Btn variant="accent" size="sm" icon="check" onClick={() => holdCall("approve_hold", { hold_id: h.id }, h.unit + " approved", "green")}>Approve</Btn>
                   <Btn variant="ghost" size="sm" onClick={() => holdCall("reject_hold", { hold_id: h.id }, "Request declined", "orange")}>Decline</Btn>
@@ -420,18 +437,33 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
                       <div style={{ fontSize: 11, fontWeight: 700, color: "var(--info)", marginBottom: 4 }}>HAND-OVER REQUESTED</div>
                       <RequesterRow hold={pending} />
                       <LeadTag hold={pending} />
+                      {/* the holder may approve only a colleague's same-kind hand-over (server rule);
+                          a kind change or their own request waits for a manager */}
                       {(isManager || meName === approved.requestedBy) && (
-                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                          <Btn variant="accent" size="sm" style={btn} onClick={() => holdCall("approve_hold", { hold_id: pending.id }, "Handed over", "green")}>Approve hand-over</Btn>
+                        <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+                          {(isManager || (pending.requestedBy && pending.requestedBy !== approved.requestedBy && pending.kind === approved.kind)) &&
+                            <Btn variant="accent" size="sm" style={btn} onClick={() => holdCall("approve_hold", { hold_id: pending.id }, "Handed over", "green")}>Approve hand-over</Btn>}
                           <Btn variant="ghost" size="sm" onClick={() => holdCall("reject_hold", { hold_id: pending.id }, "Declined", "orange")}>Decline</Btn>
+                          {!isManager && !(pending.requestedBy && pending.requestedBy !== approved.requestedBy && pending.kind === approved.kind) &&
+                            <span style={{ fontSize: 12, color: "var(--neutral-500)" }}>Awaiting manager approval.</span>}
+                        </div>
+                      )}
+                      {/* the requester could not cancel their own hand-over request, which blocked
+                          every other request on the unit */}
+                      {!isManager && meName !== approved.requestedBy && meName === pending.requestedBy && (
+                        <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+                          <Btn variant="ghost" size="sm" onClick={() => holdCall("reject_hold", { hold_id: pending.id }, "Request cancelled", "orange")}>Cancel request</Btn>
+                          <span style={{ fontSize: 12, color: "var(--neutral-500)" }}>Awaiting the holder or a manager.</span>
                         </div>
                       )}
                     </div>
                   )}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
                     {canApproveApproved && <Btn variant="accent" size="sm" style={btn} onClick={() => holdCall("release_hold", { hold_id: approved.id }, "Released " + liveSelected.id, "blue")}>Release</Btn>}
-                    {isManager && <Btn variant="primary" size="sm" style={btn} onClick={() => applyStatus(liveSelected, "Sold", true)}>Mark sold</Btn>}
-                    {!pending && <Btn variant="outline" size="sm" style={btn} onClick={() => setHoldModal({ unit: liveSelected, kind: approved.kind || "Hold" })}>Request hand-over</Btn>}
+                    {isManager && <Btn variant="primary" size="sm" style={btn} onClick={() => markSold(liveSelected)}>Mark sold</Btn>}
+                    {!pending && meName !== approved.requestedBy && <Btn variant="outline" size="sm" style={btn} onClick={() => setHoldModal({ unit: liveSelected, kind: approved.kind || "Hold" })}>Request hand-over</Btn>}
+                    {!pending && !isManager && meName === approved.requestedBy && approved.kind === "Hold" &&
+                      <Btn variant="outline" size="sm" style={btn} onClick={() => setHoldModal({ unit: liveSelected, kind: "Reserve" })}>Request reserve</Btn>}
                   </div>
                 </>
               );
@@ -458,9 +490,10 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
             if (liveSelected.status === "sold") {
               return (
                 <div style={{ display: "flex", gap: 8 }}>
-                  {isManager
-                    ? <Btn variant="outline" size="sm" style={btn} onClick={() => applyStatus(liveSelected, "Available")}>Release sale</Btn>
-                    : <span style={{ fontSize: 12, color: "var(--neutral-500)" }}>This unit is sold.</span>}
+                  <span style={{ fontSize: 12, color: "var(--neutral-600)", flex: 1 }}>
+                    {liveSelected.soldTo ? <>Sold to <strong>{liveSelected.soldTo}</strong>{liveSelected.soldOn ? " on " + fmtDate(liveSelected.soldOn) : ""}</> : "This unit is sold."}
+                  </span>
+                  {isManager && <Btn variant="outline" size="sm" onClick={() => applyStatus(liveSelected, "Available")}>Release sale</Btn>}
                 </div>
               );
             }
@@ -476,7 +509,7 @@ window.PageInventory = function PageInventory({ search = "", onNav }) {
                   <Btn variant="accent" size="sm" style={btn} onClick={() => setHoldModal({ unit: liveSelected, kind: "Hold" })}>Request hold</Btn>
                   <Btn variant="outline" size="sm" style={btn} onClick={() => setHoldModal({ unit: liveSelected, kind: "Reserve" })}>Request reserve</Btn>
                   {legacyHeld && isManager && <Btn variant="ghost" size="sm" onClick={() => applyStatus(liveSelected, "Available")}>Release</Btn>}
-                  {isManager && <Btn variant="primary" size="sm" onClick={() => applyStatus(liveSelected, "Sold", true)}>Mark sold</Btn>}
+                  {isManager && <Btn variant="primary" size="sm" onClick={() => markSold(liveSelected)}>Mark sold</Btn>}
                 </div>
               </>
             );
@@ -521,7 +554,7 @@ function RequesterRow({ hold }) {
     <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
       <Avatar name={hold.requestedBy} initials={hold.requestedByInitials} size={24} />
       <div style={{ fontSize: 12, minWidth: 0 }}>
-        <span style={{ fontWeight: 600 }}>{hold.requestedBy || "—"}</span>
+        <span style={{ fontWeight: 600 }}>{hold.requestedBy || hold.filedBy || "—"}</span>
         <span style={{ color: "var(--neutral-400)" }}>{hold.requestedByRole ? " · " + hold.requestedByRole : ""}{hold.requestedByPhone ? " · " + hold.requestedByPhone : ""}</span>
       </div>
     </div>

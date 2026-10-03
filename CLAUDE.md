@@ -139,7 +139,7 @@ doctypes, so it won't apply field/option changes to a live site).
   bookings, paymentDues, campaigns, grids, tasks, stages, owners, currentUser, today …). Tasks
   carry `leadId` + `project` (P-<code>) so the calendar can filter tasks by project and open the
   linked lead; visits carry `leadId` likewise.
-- Writes: `create_lead`, `log_activity`, `update_lead_stage`, `reassign_lead`, `bulk_reassign`,
+- Writes: `create_lead`, `update_lead` (edit details; logged), `create_channel_partner` (any CRM user; an existing name only fills blanks), `log_activity`, `update_lead_stage`, `reassign_lead`, `bulk_reassign`,
   `schedule_visit`, `set_unit_status`, `block_unit`, `advance_booking`, `record_receipt`,
   `send_reminder`, `process_payout`, `create_project`, `add_units`, `create_task`, `set_task_status`.
 - **`set_unit_status(unit_id, status)`** drives the inventory lifecycle (Available↔Blocked↔Reserved→Sold);
@@ -305,13 +305,44 @@ doctypes, so it won't apply field/option changes to a live site).
   instead of `` `${u.tower}-${u.num}` ``, `"FL " + f` or `priceFrom / 1e7`. `get_bootstrap` groups a
   blank tower under `""` (a `None` key serialises as the string "null"). Never derive a rate or an
   "all-in" figure from a missing price.
-- **Hold attribution identity is a known, documented limitation.** Actor identity comes from
-  `_actor_owner()` (maps `frappe.session.user` → the `Realty Sales Owner.user` link, else falls back to
-  the pinned persona). With ONE shared login (and reps not yet having Frappe Users) every actor
-  collapses to that persona, so ownership gates (holder-can-release/approve, requester-can-cancel)
-  effectively pass for the single user, and `requested_by` is client-asserted/informational.
-  **Approvals still gate on real Frappe roles** (`_is_manager()` via `MANAGER_ROLES`). Real per-rep
-  enforcement just needs each rep mapped to a Frappe User via that `user` link — no code change.
+- **Actor identity is real now.** Every rep has a login linked through `Realty Sales Owner.user`;
+  `_actor_owner()` / `_session_rep()` resolve the session user through that link (then a full-name
+  match). A login that is NOT a rep (Vinita, the director, Administrator) is itself — never "the
+  first rep row" (Administrator used to be shown, and credited, as "Shalu"). Rep-valued Links
+  (`requested_by`, `assigned_to`, `sales_owner`) store **None** for a non-rep actor; the doc's own
+  `owner` still records who filed it (bootstrap ships it as `filedBy`).
+- **Every modal stays mounted while closed, so its `useState` survives** — the client's "New Lead
+  reopens with the previous lead filled in" bug (one walk-in saved 3×). Pattern for any form:
+  reset in `useEffect(() => { if (open) reset() }, [open])`, a `busy` flag with `disabled={busy}`
+  on the submit `Btn` (Btn has a `disabled` prop), close only AFTER the server confirms, and use
+  `{...backdropClose(onClose)}` (forms.jsx) on the overlay — a text-select drag ending outside a
+  dialog fires `click` on the backdrop and used to discard drafts. Forms with typed content get a
+  `requestClose` that confirms before discarding.
+- **`frappe.call` already shows the server's error.** It rejects with a jqXHR, so
+  `frappe.msgprint(e.message || …)` adds a second, useless dialog (`e.message` is undefined; once
+  it rendered "[object Object]"). In catch blocks just restore state.
+- **A controlled `<select>` whose value is not among its options DISPLAYS the first option** while
+  the state holds something else — the task form showed "Aniruddha" and saved no assignee; the hold
+  form showed a rep and sent the manager's own name. Always give an optional select a blank option
+  (React's version of the Frappe first-option trap above).
+- **Lead capture rules (`_lead_source_fields`):** `Channel Partner` requires a real partner,
+  `Reference` requires `referred_by` (+ optional `referred_by_phone`); changing the source clears
+  the other source's field — a partner left behind on a Reference lead was the "auto-filled Pravin
+  Ganorkar". Phones are stored canonical by `_clean_phone` (10 digits, +91/0 stripped, or
+  "+<digits>" for foreign); budget goes through `_parse_budget` ("75 L", "1.3 Cr" → rupees,
+  garbage refused — `flt()` silently turned "75 lakh" into "no budget"). Duplicate phones (last 10
+  digits) warn client-side and the server refuses without `allowDuplicate`.
+- **`add_units` invents nothing.** Blank price/carpet/facing/typology stay blank (it used to fill
+  ₹50 L / 700 sq ft / rotating E/W/N/S). Blank tower = the building itself (was forced to "A").
+  Floors -2..99 (`G01`, `B101`); it follows a tower's 3-digit numbering and skips any unit whose
+  tower+floor+number already exists in ANY id format.
+- **Uploads use a `File` doc directly**, not `frappe.utils.file_manager.save_file` (that applies a
+  10 MB default). Limit 24 MB, checked in the browser first. Frappe parses PDFs on save — a damaged
+  one now gets a readable message instead of a pypdf traceback.
+- **Testing server rules:** `bench console` + `exec(open(script).read(), {"frappe": frappe})` with
+  `frappe.set_user(...)` per role. Most endpoints COMMIT, so use ZZT/ZZTEST records and delete them.
+  Note `DoesNotExistError` subclasses `ValidationError` — an "expected refusal" test can pass on a
+  typo'd id.
 
 ## Verifying
 
@@ -410,6 +441,18 @@ must stay invisible). Endpoints: `list_crm_users`, `create_crm_user`,
 and then hand an **anonymous** URL to any private client document. This was reproduced
 end-to-end and is now closed.
 
+**The CRM API is CRM-roles only (since 03 Oct 2026).** `_guard()` used to reject only Guest — and
+this is a SHARED site, so any of its 39 other staff logins or 32 portal users could call
+`get_bootstrap` (it reads with `frappe.get_all`, which ignores DocPerms) and download every lead,
+phone and partner. `_guard()` now requires one of `CRM_ROLES`; the public share link
+(`view_shared_document`, `allow_guest`) does not call `_guard()` and is unaffected.
+
+**Sending email accounts hold secrets.** `Realty Email Account` is System-Manager-only in DocPerms;
+a personal account is editable/testable only by its owner, a shared one by managers, and anyone
+may send from a shared one (`_may_edit_account` / `_may_send_from`). The controller refuses a
+change of email address / SMTP host / port / SSL without a new app password — otherwise "Test"
+would hand the stored Gmail App Password to whatever host the editor typed.
+
 Rule: **any doctype whose writes are supposed to flow through a gated endpoint must not grant
 `write` to the roles that endpoint refuses.** Current matrix (see `_ledger_perms()` in
 `install.py`, mirrored in each doctype JSON):
@@ -421,6 +464,12 @@ Rule: **any doctype whose writes are supposed to flow through a gated endpoint m
 | Realty Document | full | full | r+w+c | **r+c** (upload) | read |
 | Realty Unit | full | full | full | read | read |
 | Realty Project | full | full | full | read | read |
+| Realty Email Account | full | — | — | — | — |
+| Realty Lead Source | full | full | full | read | read |
+| Realty Lead Stage | full | full | read | read | read |
+
+Lead Source and Lead Stage also have `allow_rename = 0`: renaming "Channel Partner" or "booked"
+through the desk re-links every lead and breaks the code that keys on those names.
 
 Every write to these in `api/crm.py` uses `ignore_permissions=True`, so this costs nothing
 functionally. `Realty Document` keeps `create` for reps because `upload_document` deliberately
@@ -448,6 +497,27 @@ pass for: Documents Edit + "Make shareable" (`page-documents.jsx`, `lead-detail.
 record field interpolated into one is an injection sink; a lead named
 `<img src=x onerror=…>` executed JS in the desk session. Use `window.esc()` (shell.jsx) at
 those call sites.
+
+## Client fixes + second full audit (03 Oct 2026)
+
+The client (via Vinita) reported: the New Lead form reopened with the previous lead filled in
+(so LD-2934/35/36 are three copies of one walk-in), choosing "Channel Partner" offered no usable
+partner picker (LD-2937 saved with no partner), and "Reference" carried a stale referrer. Fixed
+with a rewritten `NewLeadModal`, a type-to-search `SearchSelect` for the 334 partners with
+"Add a new partner" inline (`create_channel_partner`), a `SuggestInput` "Referred by", duplicate-
+phone warnings, and **Edit details** on every lead (`update_lead`, every change logged on the
+timeline). The four Reference leads' referrers were moved from `channel_partner` to the new
+`referred_by` field. Partners page search / tier filter / Onboard / View leads were inert — wired.
+
+A 59-agent audit (6 module reviewers + a skeptic per finding) then confirmed 49 defects, all fixed
+the same day. The critical ones: the CRM API open to every login on the shared site, and sending-
+account App Passwords readable/hijackable by any CRM user. Also: Add units inventing prices and
+duplicating real units, hold upgrades with no manager approval, "Mark sold" not recording the
+buyer (Realty Unit now has `sold_to_lead` / `sold_to_contact` / `sold_on`), double-submits in
+every form, a calendar where clicking a task completed it, fabricated Settings (a made-up GST
+number and address, integrations shown "CONNECTED"), and Payment Due / Campaign statuses that
+defaulted to "paid" / "active". Server acceptance tests (35 checks, run as a non-CRM login, two
+reps and a manager) pass.
 
 ## Current state (done) & ideas for next
 
