@@ -291,7 +291,7 @@ window.Sidebar = function Sidebar({ active = "leads", compact = false, onNav }) 
               title="Change your password"
               style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer",
                 fontSize: 11, color: "rgba(255,255,255,0.55)", textAlign: "left" }}>
-              {_me().role || "Team member"} · <span style={{ textDecoration: "underline" }}>Change password</span>
+              {_me().role || (cu.canManageUsers ? "Admin" : cu.isManager ? "Manager" : "Team member")} · <span style={{ textDecoration: "underline" }}>Change password</span>
             </button>
           </div>
         )}
@@ -385,7 +385,7 @@ window.Btn = function Btn({ variant = "primary", icon, children, size = "md", on
     <button onClick={disabled ? undefined : onClick} disabled={disabled} title={title} style={{
       display: "inline-flex", alignItems: "center", gap: 8,
       borderRadius: 999, fontFamily: "var(--font-display)", fontWeight: 600,
-      letterSpacing: "0.04em", textTransform: "uppercase",
+      letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap",
       cursor: disabled ? "not-allowed" : "pointer", transition: "all 250ms var(--ease-standard)",
       ...sizes[size], ...variants[variant], ...style,
       ...(disabled ? { opacity: 0.55 } : {}),

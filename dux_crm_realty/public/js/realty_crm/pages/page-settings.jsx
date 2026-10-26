@@ -50,6 +50,12 @@ window.PageSettings = function PageSettings() {
 
 const isMgr = () => !!(window.CRM_DATA && window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.isManager);
 const refreshCRM = async () => { if (window.__refreshCRM) await window.__refreshCRM(); };
+// "2026-09-29 16:49:48.495264" (server, site time zone) -> "29 Sept 2026, 4:49 pm"
+const fmtWhen = (s) => {
+  const d = new Date(String(s).slice(0, 19).replace(" ", "T"));
+  return isNaN(d) ? String(s).slice(0, 16)
+    : d.toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+};
 
 const notYet = (text) => (
   <div style={{ marginTop: 16, padding: "12px 14px", borderRadius: 8, background: "var(--neutral-50)", border: "1px solid var(--hairline)", fontSize: 13, color: "var(--neutral-600)" }}>{text}</div>
@@ -175,7 +181,7 @@ function UsersSettings() {
                 {u.isSelf && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "var(--dux-amber-100)", color: "var(--dux-amber-600)" }}>YOU</span>}
                 {!u.passwordSet && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, background: "var(--error-bg)", color: "var(--error)" }}>NO PASSWORD</span>}
               </div>
-              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{u.email}{u.lastLogin ? " · last login " + u.lastLogin : " · never logged in"}</div>
+              <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{u.email}{u.lastLogin ? " · last login " + fmtWhen(u.lastLogin) : " · never logged in"}</div>
             </div>
             <select value={u.salesOwner || ""} title="Linked sales rep"
               onChange={(e) => call("link_crm_user_owner", { email: u.email, sales_owner: e.target.value || null }, "Rep link updated")}

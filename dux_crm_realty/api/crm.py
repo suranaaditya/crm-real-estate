@@ -911,9 +911,10 @@ def update_lead_stage(lead, stage):
 	old = doc.stage
 	doc.stage = stage
 	doc.last_activity = frappe.utils.nowdate()
+	label = {s.stage_id: s.label for s in frappe.get_all("Realty Lead Stage", fields=["stage_id", "label"])}
 	doc.append("activities", {"activity_datetime": frappe.utils.now(),
 		"who": frappe.utils.get_fullname() or "You", "activity_type": "note",
-		"text": f"Stage changed from {old or '—'} to {stage}."})
+		"text": f"Stage changed from {label.get(old, old) or '—'} to {label.get(stage, stage)}."})
 	doc.save()
 	frappe.db.commit()
 	return {"ok": True, "stage": stage, "activities": _lead_activities(doc)}

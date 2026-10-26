@@ -583,7 +583,7 @@ function ProjStat({ label, value, accent, mono }) {
       <div className="dux-eyebrow" style={{ fontSize: 9 }}>{label}</div>
       <div style={{
         fontFamily: mono ? "var(--font-mono)" : "var(--font-display)",
-        fontSize: mono ? 16 : 22, fontWeight: 700, marginTop: 4,
+        fontSize: mono ? 16 : 22, fontWeight: 700, marginTop: 4, whiteSpace: "nowrap",
         color: accent ? "var(--dux-amber-600)" : "var(--neutral-800)",
       }}>{value}</div>
     </div>

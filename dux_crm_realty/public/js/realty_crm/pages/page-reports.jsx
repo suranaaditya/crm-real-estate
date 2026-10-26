@@ -121,7 +121,7 @@ window.PageReports = function PageReports() {
         </div>
       </Panel>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, alignItems: "start" }}>
         {/* Source breakdown */}
         <Panel title="Lead sources" subtitle="ALL LEADS">
           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 24, alignItems: "center" }}>

@@ -428,8 +428,10 @@ function KanCard({ lead, density, onClick }) {
         </div>
         <ScoreChip score={lead.score} />
       </div>
-      <div style={{ fontSize: 12, color: "var(--neutral-800)", marginBottom: 6 }}>
-        <strong>{lead.interest}</strong> at {lead.projectName}
+      <div style={{ fontSize: 12, color: (lead.interest || lead.projectName) ? "var(--neutral-800)" : "var(--neutral-400)", marginBottom: 6 }}>
+        {lead.interest || lead.projectName
+          ? <>{lead.interest && <strong>{lead.interest}</strong>}{lead.interest && lead.projectName ? " at " : ""}{lead.projectName}</>
+          : "No project yet"}
       </div>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600, color: "var(--dux-navy)", marginBottom: 10 }}>
         {lead.budget > 0 ? fmtINR(lead.budget) : "No budget"}

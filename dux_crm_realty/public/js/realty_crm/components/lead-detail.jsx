@@ -37,7 +37,8 @@ window.LeadDetail = function LeadDetail({ lead: leadProp, onClose }) {
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.update_lead_stage", args: { lead: lead.id, stage: s } });
       if (r.message && r.message.activities) setActivities(r.message.activities);
-      frappe.show_alert({ message: "Status changed to " + s, indicator: "blue" });
+      const lbl = ((data.stages || []).find(x => x.id === s) || {}).label || s;
+      frappe.show_alert({ message: "Status changed to " + esc(lbl), indicator: "blue" });
       refreshList();
     } catch (e) { frappe.msgprint(e.message || "Could not change status"); }
   };
@@ -220,7 +221,7 @@ function LogActivityModal({ modal, onClose, lead, onLogged }) {
     try {
       const r = await frappe.call({ method: "dux_crm_realty.api.crm.log_activity", args: { lead: lead.id, text: text.trim(), activity_type: modal.type } });
       onLogged(r.message || r);
-      frappe.show_alert({ message: modal.label + " logged", indicator: "green" });
+      frappe.show_alert({ message: { call: "Call logged", whatsapp: "WhatsApp message logged" }[modal.type] || "Note added", indicator: "green" });
       onClose();
     } catch (e) { setBusy(false); /* frappe.call already showed the server's message */ }
   };
