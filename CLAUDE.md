@@ -413,7 +413,8 @@ What remains is ONLY client data: 20 projects, 246 units, 853 leads, 126 visits,
 `Realty CRM User` is an **explicit allowlist** — the ONLY logins this app may manage.
 Never derive manageability from "holds a Realty role" (shared box; other apps' users
 must stay invisible). Endpoints: `list_crm_users`, `create_crm_user`,
-`set_crm_user_password`, `set_crm_user_status`, `set_crm_user_role`, `link_crm_user_owner`.
+`set_crm_user_password`, `set_crm_user_status`, `set_crm_user_role`, `link_crm_user_owner`
+(and, for the rep row itself, `create_rep` / `set_rep_site`).
 
 - Gate is **`_is_user_admin()` (Realty Admin / System Manager) — deliberately NARROWER than
   `_is_manager()`**. Approving a hold is a business call; resetting a password is an identity
@@ -430,6 +431,13 @@ must stay invisible). Endpoints: `list_crm_users`, `create_crm_user`,
   Setting one revokes outstanding reset keys + sessions.
 - Modules are deep-linkable via the URL hash (`#leads`, `#inventory`) — also how the
   PDF screenshots are captured headlessly.
+- **Rep "site"** (added 26 Oct 2026 for Gautam's "login for Avinash Soyam, Isasani site, as a
+  sales person"): `Realty Sales Owner.site` (Link → Realty Project) = the project a rep mainly
+  works. **"Isasani site" = Abhiman Niwas (AN, Hingna Road).** Set on Add member (`create_rep`
+  takes `site`) or later from Team & roles via `set_rep_site(owner, site)` (manager-only);
+  bootstrap ships `owners[].site` / `siteName`. It is informational — it does NOT restrict which
+  leads/projects a rep sees. `create_rep` now registers the `Realty CRM User` row AFTER inserting
+  the rep, linked to it (it used to register the login first, unlinked).
 
 ## Security model — read before touching permissions (E2E audit, 07 Aug 2026)
 

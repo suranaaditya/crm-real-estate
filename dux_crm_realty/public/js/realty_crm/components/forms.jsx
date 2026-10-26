@@ -986,7 +986,7 @@ const REP_LOGIN_ROLES = [
   ["Realty Admin", "Admin"],
 ];
 window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
-  const init = () => ({ full_name: "", role: "Sales Executive", phone: "", email: "", createLogin: false, frappeRole: "Realty Sales Executive" });
+  const init = () => ({ full_name: "", role: "Sales Executive", phone: "", email: "", site: "", createLogin: false, frappeRole: "Realty Sales Executive" });
   const canLogin = !!(window.CRM_DATA && window.CRM_DATA.currentUser && window.CRM_DATA.currentUser.canManageUsers);
   const [form, setForm] = useStateF(init);
   const [busy, setBusy] = useStateF(false);
@@ -1020,6 +1020,12 @@ window.AddRepModal = function AddRepModal({ open, onClose, onSaved }) {
           </Select>
         </Field>
         <Field label="Phone"><Input placeholder="+91…" value={form.phone} onChange={(e) => u("phone", e.target.value)} /></Field>
+        <Field label="Site" span={2} hint="The project this person mainly works on">
+          <Select value={form.site} onChange={(e) => u("site", e.target.value)}>
+            <option value="">— No particular site —</option>
+            {((window.CRM_DATA || {}).projects || []).map(p => <option key={p.id} value={p.id}>{[p.name, p.locality].filter(Boolean).join(" — ")}</option>)}
+          </Select>
+        </Field>
         <Field label="Email" span={2} hint="Used as the ERPNext login id, if you create one"><Input type="email" placeholder="name@shradha.in" value={form.email} onChange={(e) => u("email", e.target.value)} /></Field>
         {/* creating a login is a user-admin action server-side: a Sales Manager was offered it
             and then refused */}

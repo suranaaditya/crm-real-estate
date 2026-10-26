@@ -200,6 +200,8 @@ def create_doctypes():
 		# session->rep mapping for hold attribution (blank until reps get Frappe logins)
 		f("user", "Link", "User", options="User"),
 		f("phone", "Data", "Phone"),
+		# the project / site a rep mainly works ("Isasani site" = Abhiman Niwas)
+		f("site", "Link", "Site", options="Realty Project"),
 	# BLOCKER FIX: `user` decides whose identity a session resolves to
 	# (_actor_owner). If sales executives can write this doctype, any of them can
 	# point a rep row at their own login and inherit that rep's holds/leads.

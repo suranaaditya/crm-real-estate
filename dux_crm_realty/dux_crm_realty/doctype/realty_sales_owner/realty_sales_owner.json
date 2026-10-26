@@ -12,7 +12,8 @@
   "role",
   "initials",
   "user",
-  "phone"
+  "phone",
+  "site"
  ],
  "fields": [
   {
@@ -51,6 +52,12 @@
    "fieldname": "phone",
    "fieldtype": "Data",
    "label": "Phone"
+  },
+  {
+   "fieldname": "site",
+   "fieldtype": "Link",
+   "label": "Site",
+   "options": "Realty Project"
   }
  ],
  "grid_page_length": 50,

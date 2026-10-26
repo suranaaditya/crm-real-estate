@@ -147,7 +147,7 @@ def get_bootstrap():
 
 	# ---- masters / lookups ----
 	owners = frappe.get_all("Realty Sales Owner",
-		fields=["full_name", "owner_id", "role", "initials", "phone", "user"], order_by="owner_id")
+		fields=["full_name", "owner_id", "role", "initials", "phone", "user", "site"], order_by="owner_id")
 	owner_by_name = {o.full_name: o for o in owners}
 
 	projects_raw = frappe.get_all("Realty Project", fields=[
@@ -458,7 +458,8 @@ def get_bootstrap():
 		"activity": focused["activities"] if focused else [],
 		"projects": projects, "sources": sources, "stages": stages, "owners": [
 			{"id": o.owner_id, "name": o.full_name, "role": o.role, "initials": o.initials,
-			 "phone": o.phone, "login": o.user}
+			 "phone": o.phone, "login": o.user, "site": _pid(o.site),
+			 "siteName": proj_name_by_code.get(o.site)}
 			for o in owners],
 		"channelPartners": channel_partners, "leads": leads,
 		"documents": documents, "documentsByProject": docs_by_project,
@@ -2602,14 +2603,37 @@ def create_rep(payload):
 			})
 			u.insert(ignore_permissions=True)
 			user_link = u.name
-			_register_login(user_link, full_name, frole)
+	site = _pcode(payload.get("site")) or None
+	if site and not frappe.db.exists("Realty Project", site):
+		frappe.throw(_("Project {0} not found.").format(site))
 	frappe.get_doc({
 		"doctype": "Realty Sales Owner", "full_name": full_name, "owner_id": owner_id,
 		"role": role_text, "initials": initials,
-		"phone": (payload.get("phone") or "").strip() or None, "user": user_link,
+		"phone": (payload.get("phone") or "").strip() or None, "user": user_link, "site": site,
 	}).insert(ignore_permissions=True)
+	if user_link:
+		# registered AFTER the rep row exists, so the allowlist entry can link to it (it used to
+		# be registered first, unlinked — Users & access then showed the login with no rep)
+		_register_login(user_link, full_name, frole, sales_owner=full_name)
 	frappe.db.commit()
 	return {"ok": True, "name": full_name, "owner_id": owner_id, "login": user_link}
+
+
+@frappe.whitelist()
+def set_rep_site(owner, site=None):
+	"""Record which project/site a rep mainly works. Manager-only (it is a team-structure call)."""
+	_guard()
+	if not _is_manager():
+		frappe.throw(_("Only a manager can change a rep's site."), frappe.PermissionError)
+	name = _resolve_owner(owner)
+	if not name:
+		frappe.throw(_("Sales rep {0} not found.").format(owner))
+	code = _pcode(site) or None
+	if code and not frappe.db.exists("Realty Project", code):
+		frappe.throw(_("Project {0} not found.").format(code))
+	frappe.db.set_value("Realty Sales Owner", name, "site", code)
+	frappe.db.commit()
+	return {"ok": True, "owner": name, "site": _pid(code)}
 
 
 @frappe.whitelist()

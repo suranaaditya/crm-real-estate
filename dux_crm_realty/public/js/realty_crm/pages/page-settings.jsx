@@ -86,12 +86,26 @@ function TeamSettings() {
       </div>
       <div style={{ marginTop: 24, background: "var(--bg)", border: "1px solid var(--hairline)", borderRadius: 12, overflow: "hidden" }}>
         {team.map((m, i) => (
-          <div key={m.id || m.name} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 14, alignItems: "center", borderTop: i ? "1px solid var(--hairline)" : "none" }}>
+          <div key={m.id || m.name} style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "auto 1fr auto auto auto", gap: 14, alignItems: "center", borderTop: i ? "1px solid var(--hairline)" : "none" }}>
             <Avatar name={m.name} initials={m.initials} size={36} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>{m.name}</div>
               <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{m.login || m.phone || "—"}</div>
             </div>
+            {/* the site / project this rep mainly works */}
+            {manager
+              ? <select className="dux-input" value={m.site || ""} title="Site" style={{ width: 190, fontSize: 12 }}
+                  onChange={async (e) => {
+                    try {
+                      await frappe.call({ method: "dux_crm_realty.api.crm.set_rep_site", args: { owner: m.name, site: e.target.value || null } });
+                      frappe.show_alert({ message: esc(m.name) + " — site updated", indicator: "green" });
+                      await refreshCRM();
+                    } catch (err) { /* frappe.call already showed the server's message */ }
+                  }}>
+                  <option value="">— No site —</option>
+                  {(data.projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              : <span style={{ fontSize: 11, color: "var(--neutral-600)" }}>{m.siteName || "—"}</span>}
             <span style={{ fontSize: 11, color: "var(--neutral-600)", fontWeight: 600 }}>{m.role}</span>
             <span style={{
               fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 999, textTransform: "uppercase",
