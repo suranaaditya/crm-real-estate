@@ -408,6 +408,14 @@ What remains is ONLY client data: 20 projects, 246 units, 853 leads, 126 visits,
 "No … yet" empty states. There is still **no endpoint to create a booking or a campaign**
 (the "New campaign" button is inert) — the next build item, not a bug in the empty state.
 
+## Training video (27 Oct 2026)
+
+A narrated ~15-min walkthrough for the client's sales team was recorded from the live app; the files
+are in `client-deliverables/` (git-ignored: it shows real leads). Tooling + how to re-record (and the
+gotchas) are in `scripts/demo_video/README.md`. It writes "(Demo)" records to the LIVE CRM: always run
+its `cleanup_demo.py` after every pass. Re-record the email part once the Ollama box is back (it was
+down, so the take only hovers "Draft with AI").
+
 ## User management (Settings → Users & access)
 
 `Realty CRM User` is an **explicit allowlist** — the ONLY logins this app may manage.

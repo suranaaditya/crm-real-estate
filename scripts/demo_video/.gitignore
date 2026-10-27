@@ -1,0 +1,16 @@
+# generated: audio, recordings, renders, QA frames, the tool venv, the session id
+venv/
+ffmpeg
+sid.txt
+audio/
+durations.json
+rec_out*/
+dry_out/
+final/
+qa*/
+sheets/
+*.pdf
+*.png
+*.log
+dry_log.txt
+rec_log.txt
