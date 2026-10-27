@@ -147,7 +147,7 @@ window.Avatar = function Avatar({ name, initials, size = 32, tone }) {
       display: "inline-flex", alignItems: "center", justifyContent: "center",
       background: bg, color: fg, fontSize, fontWeight: 600, fontFamily: "var(--font-display)",
       letterSpacing: "0.02em", flexShrink: 0,
-    }}>{initials}</div>
+    }}>{initials || (name || "").split(" ").filter(Boolean).map(w => w[0]).join("").slice(0, 2).toUpperCase()}</div>
   );
 };
 

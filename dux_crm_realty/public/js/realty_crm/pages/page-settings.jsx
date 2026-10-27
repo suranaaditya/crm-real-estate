@@ -237,7 +237,7 @@ function ProjectsSettings() {
               <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
               <div style={{ fontSize: 11, color: "var(--neutral-400)" }}>{p.locality ? p.locality + ", " : ""}{p.city} · {p.type}</div>
             </div>
-            <span style={{ fontSize: 12, color: "var(--neutral-500)" }}>{p.totalUnits || 0} units · {p.sold || 0} sold</span>
+            <span style={{ fontSize: 12, color: "var(--neutral-500)" }}>{p.totalUnits || 0} {(p.totalUnits || 0) === 1 ? "unit" : "units"} · {p.sold || 0} sold</span>
             {manager
               ? <Btn variant="ghost" size="sm" icon="x" onClick={() => del(p)}>Delete</Btn>
               : <span style={{ fontSize: 11, color: "var(--neutral-300)" }}>—</span>}
